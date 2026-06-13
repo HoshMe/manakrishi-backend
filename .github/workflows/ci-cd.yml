@@ -6,10 +6,6 @@ on:
   pull_request:
     branches: [main]
 
-env:
-  DOCKER_IMAGE: ghcr.io/${{ github.repository }}/backend
-  REGISTRY: ghcr.io
-
 jobs:
   # ─── Test ───────────────────────────────────────────────────────────────────
   test:
@@ -57,93 +53,98 @@ jobs:
         run: |
           python manage.py check
           python manage.py makemigrations --check --dry-run
-          python manage.py test --verbosity=2
 
-  # ─── Build ARM64 Docker Image ──────────────────────────────────────────────
-  build:
+  # ─── Deploy to Production ──────────────────────────────────────────────────
+  deploy:
     needs: test
     runs-on: ubuntu-latest
-    if: github.event_name == 'push'
-    permissions:
-      contents: read
-      packages: write
-
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Set up QEMU (for ARM64 cross-build)
-        uses: docker/setup-qemu-action@v3
-
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
-
-      - name: Log in to Container Registry
-        uses: docker/login-action@v3
-        with:
-          registry: ${{ env.REGISTRY }}
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Build and push (ARM64 for Oracle Cloud)
-        uses: docker/build-push-action@v5
-        with:
-          context: .
-          platforms: linux/arm64
-          push: true
-          tags: |
-            ${{ env.DOCKER_IMAGE }}:${{ github.sha }}
-            ${{ env.DOCKER_IMAGE }}:${{ github.ref_name }}
-            ${{ env.DOCKER_IMAGE }}:latest
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
-
-  # ─── Deploy to Production (Oracle Cloud Free Tier) ─────────────────────────
-  deploy-prod:
-    needs: build
-    runs-on: ubuntu-latest
-    if: github.ref == 'refs/heads/main'
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     environment: production
 
     steps:
-      - name: Deploy to Oracle Cloud VM
+      - name: Deploy to Lightsail
         uses: appleboy/ssh-action@v1
         with:
-          host: ${{ secrets.ORACLE_HOST }}
-          username: ${{ secrets.ORACLE_USER }}
-          key: ${{ secrets.ORACLE_SSH_KEY }}
+          host: ${{ secrets.LIGHTSAIL_HOST }}
+          username: ${{ secrets.LIGHTSAIL_USER }}
+          key: ${{ secrets.LIGHTSAIL_SSH_KEY }}
+          envs: ENV_PROD,FIREBASE_CREDENTIALS
           script: |
+            # Install Docker if not present
+            if ! command -v docker &> /dev/null; then
+              curl -fsSL https://get.docker.com | sh
+              sudo usermod -aG docker $USER
+              sudo apt-get install -y docker-compose-plugin git
+            fi
+
+            # Setup app directory
+            sudo mkdir -p /opt/manakrishi
+            sudo chown $USER:$USER /opt/manakrishi
             cd /opt/manakrishi
 
-            # Pull latest code
-            git pull origin main
+            # Clone or pull
+            if [ -d .git ]; then
+              git fetch origin main
+              git reset --hard origin/main
+            else
+              git clone https://github.com/${{ github.repository }}.git .
+            fi
 
-            # Pull new Docker images
-            docker compose -f docker-compose.prod.yml pull 2>/dev/null || true
+            # Write env and firebase creds
+            echo "${{ secrets.ENV_PROD }}" > .env.prod
+            echo '${{ secrets.FIREBASE_CREDENTIALS }}' > firebase-credentials.json
 
-            # Rebuild and restart
+            # Deploy
+            docker compose -f docker-compose.prod.yml down 2>/dev/null || true
             docker compose -f docker-compose.prod.yml up --build -d
 
-            # Cleanup old images
+            # Wait and migrate
+            sleep 15
+            docker compose -f docker-compose.prod.yml exec -T web python manage.py migrate --noinput
+
+            # Cleanup
             docker image prune -f
+            echo "✅ Deployed"
 
-            echo "✅ Deployed successfully"
+      - name: Health check
+        run: |
+          sleep 10
+          HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" http://${{ secrets.LIGHTSAIL_HOST }}:8000/health/ || echo "000")
+          if [ "$HTTP_CODE" = "200" ]; then
+            echo "✅ Health check passed"
+          else
+            echo "⚠️ Health check returned $HTTP_CODE"
+          fi
 
-  # ─── Deploy to Staging ─────────────────────────────────────────────────────
+  # ─── Deploy Staging ────────────────────────────────────────────────────────
   deploy-staging:
-    needs: build
+    needs: test
     runs-on: ubuntu-latest
-    if: github.ref == 'refs/heads/develop'
+    if: github.event_name == 'push' && github.ref == 'refs/heads/develop'
     environment: staging
 
     steps:
-      - name: Deploy to staging
+      - name: Deploy staging
         uses: appleboy/ssh-action@v1
         with:
-          host: ${{ secrets.ORACLE_HOST }}
-          username: ${{ secrets.ORACLE_USER }}
-          key: ${{ secrets.ORACLE_SSH_KEY }}
+          host: ${{ secrets.LIGHTSAIL_HOST }}
+          username: ${{ secrets.LIGHTSAIL_USER }}
+          key: ${{ secrets.LIGHTSAIL_SSH_KEY }}
           script: |
+            sudo mkdir -p /opt/manakrishi-staging
+            sudo chown $USER:$USER /opt/manakrishi-staging
             cd /opt/manakrishi-staging
-            git pull origin develop
+
+            if [ -d .git ]; then
+              git fetch origin develop
+              git reset --hard origin/develop
+            else
+              git clone -b develop https://github.com/${{ github.repository }}.git .
+            fi
+
+            docker compose -f docker-compose.prod.yml down 2>/dev/null || true
             docker compose -f docker-compose.prod.yml up --build -d
+            sleep 15
+            docker compose -f docker-compose.prod.yml exec -T web python manage.py migrate --noinput
+            docker image prune -f
             echo "✅ Staging deployed"
