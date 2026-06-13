@@ -1,0 +1,60 @@
+databases: []
+
+services:
+  # Web Service
+  - type: web
+    name: manakrishi-api
+    runtime: python
+    buildCommand: |
+      pip install -r requirements.txt
+      python manage.py collectstatic --noinput
+      python manage.py migrate --noinput
+    startCommand: gunicorn config.wsgi:application --bind 0.0.0.0:$PORT --workers 3 --timeout 120
+    envVars:
+      - key: PYTHON_VERSION
+        value: "3.12.0"
+      - key: DEBUG
+        value: "False"
+      - key: ALLOWED_HOSTS
+        value: ".onrender.com,api.manakrishi.com"
+      - key: DATABASE_URL
+        fromDatabase:
+          name: manakrishi-db
+          property: connectionString
+      - key: REDIS_URL
+        fromService:
+          name: manakrishi-redis
+          type: redis
+          property: connectionString
+      - key: DJANGO_SECRET_KEY
+        generateValue: true
+      - key: CORS_ORIGINS
+        value: "https://manakrishi.com,https://admin.manakrishi.com"
+    healthCheckPath: /health/
+
+  # Celery Worker
+  - type: worker
+    name: manakrishi-worker
+    runtime: python
+    buildCommand: pip install -r requirements.txt
+    startCommand: celery -A config worker -l warning --concurrency=2
+    envVars:
+      - key: PYTHON_VERSION
+        value: "3.12.0"
+      - key: DEBUG
+        value: "False"
+      - key: DATABASE_URL
+        fromDatabase:
+          name: manakrishi-db
+          property: connectionString
+      - key: REDIS_URL
+        fromService:
+          name: manakrishi-redis
+          type: redis
+          property: connectionString
+
+  # Redis
+  - type: redis
+    name: manakrishi-redis
+    plan: free
+    maxmemoryPolicy: allkeys-lru
