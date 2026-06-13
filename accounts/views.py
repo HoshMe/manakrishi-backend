@@ -108,17 +108,25 @@ def verify_otp(request):
 def google_login(request):
     serializer = GoogleLoginSerializer(data=request.data)
     serializer.is_valid(raise_exception=True)
-    access_token = serializer.validated_data['access_token']
+    token = serializer.validated_data.get('access_token') or serializer.validated_data.get('id_token', '')
 
-    # Fetch user info from Google
-    resp = requests.get(
-        'https://www.googleapis.com/userinfo/v2/me',
-        headers={'Authorization': f'Bearer {access_token}'}
-    )
-    if resp.status_code != 200:
+    google_data = None
+    if token.startswith('ey'):
+        resp = requests.get(f'https://oauth2.googleapis.com/tokeninfo?id_token={token}')
+        if resp.status_code == 200:
+            google_data = resp.json()
+
+    if not google_data:
+        resp = requests.get(
+            'https://www.googleapis.com/userinfo/v2/me',
+            headers={'Authorization': f'Bearer {token}'}
+        )
+        if resp.status_code == 200:
+            google_data = resp.json()
+
+    if not google_data:
         return Response({'error': 'Invalid Google token'}, status=status.HTTP_400_BAD_REQUEST)
 
-    google_data = resp.json()
     email = google_data.get('email', '').lower()
 
     user = User.objects.filter(email=email).first()
@@ -153,7 +161,14 @@ def signup(request):
         first_name=name_parts[0],
         last_name=name_parts[1] if len(name_parts) > 1 else '',
         role=data['role'],
+        state=data.get('state', ''),
+        district=data.get('district', ''),
+        services=data.get('services', []),
     )
+    if data.get('password'):
+        user.set_password(data['password'])
+        user.login_methods = ['password']
+        user.save()
 
     tokens = get_tokens_for_user(user)
     return Response({'tokens': tokens, 'user': UserSerializer(user).data}, status=status.HTTP_201_CREATED)
@@ -285,3 +300,112 @@ def documents(request):
     
     # POST - upload document (placeholder)
     return Response({'status': 'ok', 'message': 'Document uploaded'}, status=status.HTTP_201_CREATED)
+
+
+# ─── Password Login ───────────────────────────────────────────────────────────
+
+@api_view(['POST'])
+@permission_classes([AllowAny])
+def login_password(request):
+    phone = request.data.get('phone', '').strip()
+    password = request.data.get('password', '')
+
+    if not phone or not password:
+        return Response({'error': 'Phone and password required'}, status=status.HTTP_400_BAD_REQUEST)
+
+    user = User.objects.filter(phone=phone).first()
+    if not user:
+        return Response({'error': 'User not found. Please sign up first.'}, status=status.HTTP_404_NOT_FOUND)
+
+    if not user.check_password(password):
+        return Response({'error': 'Incorrect password'}, status=status.HTTP_401_UNAUTHORIZED)
+
+    tokens = get_tokens_for_user(user)
+    return Response({'tokens': tokens, 'user': UserSerializer(user).data})
+
+
+# ─── Toggle Duty ──────────────────────────────────────────────────────────────
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
+def toggle_duty(request):
+    user = request.user
+    user.is_on_duty = not user.is_on_duty
+    user.save()
+    return Response({'is_on_duty': user.is_on_duty})
+
+
+# ─── Biometric Login ─────────────────────────────────────────────────────────
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
+def enable_biometric(request):
+    import secrets
+    from django.utils import timezone
+
+    device_id = request.data.get('device_id', '').strip()
+    device_name = request.data.get('device_name', 'Unknown Device')
+
+    if not device_id:
+        return Response({'error': 'device_id is required'}, status=status.HTTP_400_BAD_REQUEST)
+
+    token = secrets.token_urlsafe(32)
+    user = request.user
+
+    devices = [d for d in (user.biometric_devices or []) if d.get('device_id') != device_id]
+    devices.append({
+        'device_id': device_id,
+        'token': token,
+        'device_name': device_name,
+        'created_at': timezone.now().isoformat(),
+    })
+    user.biometric_devices = devices
+    if 'biometric' not in user.login_methods:
+        user.login_methods = list(set(user.login_methods + ['biometric']))
+    user.save()
+    return Response({'biometric_token': token, 'login_methods': user.login_methods})
+
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
+def disable_biometric(request):
+    device_id = request.data.get('device_id', '').strip()
+    user = request.user
+
+    if device_id:
+        user.biometric_devices = [d for d in (user.biometric_devices or []) if d.get('device_id') != device_id]
+    else:
+        user.biometric_devices = []
+
+    if not user.biometric_devices:
+        user.login_methods = [m for m in user.login_methods if m != 'biometric']
+    user.save()
+    return Response({'login_methods': user.login_methods})
+
+
+@api_view(['POST'])
+@permission_classes([AllowAny])
+def login_biometric(request):
+    phone = request.data.get('phone', '').strip()
+    biometric_token = request.data.get('biometric_token', '')
+    device_id = request.data.get('device_id', '').strip()
+
+    if not phone or not biometric_token or not device_id:
+        return Response({'error': 'Phone, device_id, and biometric_token required'}, status=status.HTTP_400_BAD_REQUEST)
+
+    user = User.objects.filter(phone=phone).first()
+    if not user:
+        return Response({'error': 'User not found'}, status=status.HTTP_404_NOT_FOUND)
+
+    if 'biometric' not in user.login_methods:
+        return Response({'error': 'Biometric login not enabled'}, status=status.HTTP_403_FORBIDDEN)
+
+    valid = any(
+        d.get('device_id') == device_id and d.get('token') == biometric_token
+        for d in (user.biometric_devices or [])
+    )
+    if not valid:
+        return Response({'error': 'Invalid biometric credentials'}, status=status.HTTP_401_UNAUTHORIZED)
+
+    tokens = get_tokens_for_user(user)
+    return Response({'tokens': tokens, 'user': UserSerializer(user).data})

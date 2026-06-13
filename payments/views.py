@@ -325,3 +325,20 @@ def earnings(request):
         'pending': pending,
         'transactions': transactions,
     })
+
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
+def withdraw_commission(request):
+    """Dealer withdraws pending commission"""
+    if request.user.role not in ('dealer', 'admin', 'manager'):
+        return Response({'error': 'Not authorized'}, status=status.HTTP_403_FORBIDDEN)
+
+    pending = Commission.objects.filter(dealer=request.user, is_withdrawn=False)
+    total = sum(c.amount for c in pending)
+
+    if total <= 0:
+        return Response({'error': 'No pending commission to withdraw'}, status=status.HTTP_400_BAD_REQUEST)
+
+    pending.update(is_withdrawn=True)
+    return Response({'withdrawn': float(total), 'message': f'₹{total} withdrawal initiated'})

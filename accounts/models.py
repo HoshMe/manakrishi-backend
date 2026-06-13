@@ -18,6 +18,12 @@ class User(AbstractUser):
     location_lat = models.DecimalField(max_digits=9, decimal_places=6, null=True, blank=True)
     location_lng = models.DecimalField(max_digits=9, decimal_places=6, null=True, blank=True)
     address = models.TextField(blank=True)
+    state = models.CharField(max_length=50, blank=True)
+    district = models.CharField(max_length=50, blank=True)
+    services = models.JSONField(default=list, blank=True)
+    login_methods = models.JSONField(default=list, blank=True)
+    biometric_devices = models.JSONField(default=list, blank=True)
+    is_on_duty = models.BooleanField(default=False)
     is_verified = models.BooleanField(default=False)
     created_at = models.DateTimeField(auto_now_add=True)
 

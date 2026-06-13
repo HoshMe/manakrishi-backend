@@ -201,6 +201,39 @@ def service_info(request):
     return Response(data)
 
 
+
+@api_view(['GET'])
+@permission_classes([IsAuthenticated])
+def check_operators(request):
+    import math, re
+    from accounts.models import User
+    service = request.GET.get('service', '')
+    district = request.GET.get('district', request.user.district or '')
+    lat = request.GET.get('lat')
+    lng = request.GET.get('lng')
+    if not service:
+        return Response({'error': 'service is required'}, status=400)
+    service_snake = re.sub(r'([A-Z])', r'_\1', service).lower().lstrip('_')
+    operators = User.objects.filter(role='operator', is_active=True, is_on_duty=True)
+    matching = [op for op in operators if service_snake in (op.services or [])]
+    if district:
+        district_match = [op for op in matching if op.district and op.district.lower() == district.lower()]
+        if district_match:
+            matching = district_match
+    if lat and lng and matching:
+        lat1, lng1 = float(lat), float(lng)
+        def haversine(lat2, lon2):
+            R = 6371
+            dlat = math.radians(float(lat2) - lat1)
+            dlon = math.radians(float(lon2) - lng1)
+            a = math.sin(dlat/2)**2 + math.cos(math.radians(lat1)) * math.cos(math.radians(float(lat2))) * math.sin(dlon/2)**2
+            return R * 2 * math.asin(math.sqrt(a))
+        nearby = [op for op in matching if op.location_lat and op.location_lng and haversine(op.location_lat, op.location_lng) <= 30]
+        if nearby:
+            matching = nearby
+    return Response({'available': len(matching) > 0, 'count': len(matching), 'service': service_snake, 'district': district})
+
+
 @api_view(['POST'])
 @permission_classes([IsAuthenticated])
 def accept_booking(request):
@@ -263,3 +296,22 @@ def update_operator_location(request):
         request.user.location_lng = lng
         request.user.save()
     return Response({'status': 'ok'})
+
+
+@api_view(['GET'])
+@permission_classes([IsAuthenticated])
+def dealer_stats(request):
+    """Dealer dashboard stats"""
+    from django.db.models import Sum, Count
+    user = request.user
+    bookings = Booking.objects.filter(dealer=user)
+    total = bookings.count()
+    completed = bookings.filter(status='completed').count()
+    revenue = bookings.filter(status='completed').aggregate(s=Sum('amount'))['s'] or 0
+    pending = bookings.filter(status__in=['pending', 'confirmed']).count()
+    return Response({
+        'total_bookings': total,
+        'completed': completed,
+        'pending': pending,
+        'revenue': float(revenue),
+    })
