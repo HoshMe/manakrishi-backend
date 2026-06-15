@@ -110,6 +110,17 @@ jobs:
 
             # Cleanup
             sudo docker image prune -f
+
+            # Auto-generate SSL if not exists and domain is set
+            DOMAIN="${{ secrets.DOMAIN }}"
+            if [ -n "$DOMAIN" ] && [ ! -d "/opt/manakrishi/certbot_certs/live/$DOMAIN" ]; then
+              echo "Generating SSL cert for $DOMAIN..."
+              sudo docker compose -f docker-compose.prod.yml run --rm certbot \
+                certonly --webroot --webroot-path=/var/www/certbot \
+                --email admin@$DOMAIN --agree-tos --no-eff-email \
+                -d $DOMAIN || true
+            fi
+
             echo "✅ Deployed"
 
       - name: Health check
