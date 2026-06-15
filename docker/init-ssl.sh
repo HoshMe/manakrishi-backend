@@ -1,9 +1,9 @@
 #!/bin/bash
 # Run this once after first deployment to generate SSL certs
-# Usage: sudo ./docker/init-ssl.sh api.manakrishi.com your@email.com
+# Usage: sudo ./docker/init-ssl.sh api.manakrishi.in your@email.com
 
-DOMAIN=${1:-api.manakrishi.com}
-EMAIL=${2:-admin@manakrishi.com}
+DOMAIN=${1:-api.manakrishi.in}
+EMAIL=${2:-admin@manakrishi.in}
 
 if [ -z "$DOMAIN" ]; then
   echo "Usage: ./init-ssl.sh <domain> <email>"

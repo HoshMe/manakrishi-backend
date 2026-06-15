@@ -49,7 +49,7 @@ def help_faqs(request):
         'faqs': data,
         'support': {
             'phone': '18001234567',
-            'email': 'support@manakrishi.com',
+            'email': 'support@manakrishi.in',
             'whatsapp': '919876543210',
         }
     })
