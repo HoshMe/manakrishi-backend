@@ -135,11 +135,11 @@ jobs:
       - name: Health check
         run: |
           sleep 10
-          HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" http://${{ secrets.LIGHTSAIL_HOST }}:8000/health/ || echo "000")
+          HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" http://${{ secrets.LIGHTSAIL_HOST }}/health/ || echo "000")
           if [ "$HTTP_CODE" = "200" ]; then
             echo "✅ Health check passed"
           else
-            echo "⚠️ Health check returned $HTTP_CODE"
+            echo "⚠️ Health check returned $HTTP_CODE (non-blocking)"
           fi
 
   # ─── Deploy Staging ────────────────────────────────────────────────────────
