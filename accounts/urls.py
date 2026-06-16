@@ -23,4 +23,6 @@ urlpatterns = [
     path('dealer-farmers/', views.dealer_farmers),
     path('all-users/', views.list_all_users),
     path('documents/', views.documents),
+    path('kyc/review/', views.kyc_review),
+    path('kyc/pending/', views.kyc_pending),
 ]

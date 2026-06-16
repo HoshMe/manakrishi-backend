@@ -55,3 +55,31 @@ class Address(models.Model):
 
     def __str__(self):
         return f"{self.user} - {self.address[:50]}"
+
+
+class KYCDocument(models.Model):
+    DOC_TYPE_CHOICES = [
+        ('aadhaar', 'Aadhaar Card'),
+        ('pan', 'PAN Card'),
+    ]
+    STATUS_CHOICES = [
+        ('pending', 'Pending'),
+        ('approved', 'Approved'),
+        ('rejected', 'Rejected'),
+    ]
+
+    user = models.ForeignKey('User', on_delete=models.CASCADE, related_name='kyc_documents')
+    doc_type = models.CharField(max_length=10, choices=DOC_TYPE_CHOICES)
+    doc_number = models.CharField(max_length=20, blank=True)
+    doc_image = models.ImageField(upload_to='kyc_documents/')
+    status = models.CharField(max_length=10, choices=STATUS_CHOICES, default='pending')
+    remarks = models.TextField(blank=True)
+    uploaded_at = models.DateTimeField(auto_now_add=True)
+    reviewed_at = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        ordering = ['-uploaded_at']
+        unique_together = ['user', 'doc_type']
+
+    def __str__(self):
+        return f"{self.user} - {self.get_doc_type_display()} ({self.status})"

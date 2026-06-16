@@ -48,7 +48,7 @@ def help_faqs(request):
     return Response({
         'faqs': data,
         'support': {
-            'phone': '18001234567',
+            'phone': '8886124318',
             'email': 'support@manakrishi.in',
             'whatsapp': '919876543210',
         }

@@ -293,14 +293,92 @@ def list_all_users(request):
 @api_view(['GET', 'POST'])
 @permission_classes([IsAuthenticated])
 def documents(request):
-    """List or upload operator documents"""
-    if request.method == 'GET':
-        # Return placeholder - in production, query a Document model
-        return Response([])
-    
-    # POST - upload document (placeholder)
-    return Response({'status': 'ok', 'message': 'Document uploaded'}, status=status.HTTP_201_CREATED)
+    """List or upload operator KYC documents"""
+    from .models import KYCDocument
 
+    if request.method == 'GET':
+        docs = KYCDocument.objects.filter(user=request.user)
+        data = [{
+            'id': d.id,
+            'doc_type': d.doc_type,
+            'doc_number': d.doc_number,
+            'doc_image': request.build_absolute_uri(d.doc_image.url) if d.doc_image else None,
+            'status': d.status,
+            'remarks': d.remarks,
+            'uploaded_at': d.uploaded_at.strftime('%d %b %Y'),
+        } for d in docs]
+        kyc_status = 'verified' if docs.filter(status='approved').count() >= 2 else (
+            'pending' if docs.filter(status='pending').exists() else 'not_submitted'
+        )
+        return Response({'documents': data, 'kyc_status': kyc_status})
+
+    # POST - upload document
+    doc_type = request.data.get('doc_type')  # 'aadhaar' or 'pan'
+    doc_number = request.data.get('doc_number', '')
+    doc_image = request.FILES.get('doc_image')
+
+    if not doc_type or doc_type not in ('aadhaar', 'pan'):
+        return Response({'error': 'doc_type must be aadhaar or pan'}, status=status.HTTP_400_BAD_REQUEST)
+    if not doc_image:
+        return Response({'error': 'doc_image is required'}, status=status.HTTP_400_BAD_REQUEST)
+
+    doc, created = KYCDocument.objects.update_or_create(
+        user=request.user, doc_type=doc_type,
+        defaults={'doc_number': doc_number, 'doc_image': doc_image, 'status': 'pending', 'remarks': ''}
+    )
+    return Response({'status': 'uploaded', 'doc_type': doc_type, 'id': doc.id}, status=status.HTTP_201_CREATED)
+
+
+
+
+@api_view(['GET'])
+@permission_classes([IsAuthenticated])
+def kyc_pending(request):
+    """List all pending KYC documents - admin only"""
+    if request.user.role not in ('admin', 'manager'):
+        return Response({'error': 'Not authorized'}, status=status.HTTP_403_FORBIDDEN)
+    from .models import KYCDocument
+    docs = KYCDocument.objects.filter(status='pending').select_related('user')
+    data = [{
+        'id': d.id,
+        'user_id': d.user.id,
+        'user_name': d.user.get_full_name(),
+        'user_phone': d.user.phone,
+        'doc_type': d.doc_type,
+        'doc_number': d.doc_number,
+        'doc_image': request.build_absolute_uri(d.doc_image.url) if d.doc_image else None,
+        'uploaded_at': d.uploaded_at.strftime('%d %b %Y'),
+    } for d in docs]
+    return Response(data)
+
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
+def kyc_review(request):
+    """Approve or reject KYC document - admin only"""
+    if request.user.role not in ('admin', 'manager'):
+        return Response({'error': 'Not authorized'}, status=status.HTTP_403_FORBIDDEN)
+    from .models import KYCDocument
+    from django.utils import timezone
+    doc_id = request.data.get('doc_id')
+    action = request.data.get('action')  # 'approve' or 'reject'
+    remarks = request.data.get('remarks', '')
+    if not doc_id or action not in ('approve', 'reject'):
+        return Response({'error': 'doc_id and action (approve/reject) required'}, status=status.HTTP_400_BAD_REQUEST)
+    doc = KYCDocument.objects.filter(id=doc_id).first()
+    if not doc:
+        return Response({'error': 'Document not found'}, status=status.HTTP_404_NOT_FOUND)
+    doc.status = 'approved' if action == 'approve' else 'rejected'
+    doc.remarks = remarks
+    doc.reviewed_at = timezone.now()
+    doc.save()
+    # If both docs approved, mark user as verified
+    user = doc.user
+    approved_count = KYCDocument.objects.filter(user=user, status='approved').count()
+    if approved_count >= 2:
+        user.is_verified = True
+        user.save()
+    return Response({'status': doc.status, 'user_verified': user.is_verified})
 
 # ─── Password Login ───────────────────────────────────────────────────────────
 
