@@ -115,12 +115,14 @@ jobs:
             DOMAIN="${{ secrets.DOMAIN }}"
             if [ -n "$DOMAIN" ]; then
               # Check if cert already exists inside the volume
-              CERT_EXISTS=$(sudo docker run --rm -v manakrishi_certbot_certs:/certs alpine sh -c "test -f /certs/live/$DOMAIN/fullchain.pem && echo yes || echo no")
+              CERT_EXISTS=$(sudo docker run --rm -v manakrishi_certbot_certs:/certs alpine sh -c "test -f /certs/live/$DOMAIN/fullchain.pem && echo yes || echo no" 2>/dev/null || echo "no")
               if [ "$CERT_EXISTS" = "no" ]; then
                 echo "Generating SSL cert for $DOMAIN..."
                 sleep 5
-                sudo docker compose -f docker-compose.prod.yml run --rm --no-deps certbot \
-                  certonly --webroot --webroot-path=/var/www/certbot \
+                sudo docker run --rm \
+                  -v manakrishi_certbot_www:/var/www/certbot \
+                  -v manakrishi_certbot_certs:/etc/letsencrypt \
+                  certbot/certbot certonly --webroot --webroot-path=/var/www/certbot \
                   --email admin@$DOMAIN --agree-tos --no-eff-email \
                   --non-interactive -d $DOMAIN || echo "SSL cert generation failed - will retry next deploy"
               else
