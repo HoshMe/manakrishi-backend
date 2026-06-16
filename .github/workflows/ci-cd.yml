@@ -114,17 +114,26 @@ jobs:
             # Auto-generate SSL if not exists and domain is set
             DOMAIN="${{ secrets.DOMAIN }}"
             if [ -n "$DOMAIN" ]; then
-              # Check if cert already exists inside the volume
-              CERT_EXISTS=$(sudo docker run --rm -v manakrishi_certbot_certs:/certs alpine sh -c "test -f /certs/live/$DOMAIN/fullchain.pem && echo yes || echo no" 2>/dev/null || echo "no")
+              # Check if cert already exists
+              CERT_EXISTS=$(sudo docker volume inspect manakrishi_certbot_certs > /dev/null 2>&1 && sudo docker run --rm -v manakrishi_certbot_certs:/certs alpine sh -c "test -f /certs/live/$DOMAIN/fullchain.pem && echo yes || echo no" 2>/dev/null || echo "no")
               if [ "$CERT_EXISTS" = "no" ]; then
                 echo "Generating SSL cert for $DOMAIN..."
-                sleep 5
+                # Stop nginx to free port 80 for standalone mode
+                sudo docker compose -f docker-compose.prod.yml stop nginx 2>/dev/null || true
+                sleep 2
+                # Generate cert using standalone mode
                 sudo docker run --rm \
-                  -v manakrishi_certbot_www:/var/www/certbot \
                   -v manakrishi_certbot_certs:/etc/letsencrypt \
-                  certbot/certbot certonly --webroot --webroot-path=/var/www/certbot \
+                  -p 80:80 \
+                  certbot/certbot certonly --standalone \
                   --email admin@$DOMAIN --agree-tos --no-eff-email \
-                  --non-interactive -d $DOMAIN || echo "SSL cert generation failed - will retry next deploy"
+                  --non-interactive -d $DOMAIN && {
+                  echo "SSL cert generated! Enabling HTTPS..."
+                  cd /opt/manakrishi
+                  sed "s/DOMAIN_PLACEHOLDER/$DOMAIN/g" docker/nginx-ssl.conf > docker/nginx.conf
+                } || echo "SSL generation failed"
+                # Restart nginx
+                sudo docker compose -f docker-compose.prod.yml start nginx 2>/dev/null || true
               else
                 echo "SSL cert already exists for $DOMAIN"
               fi
