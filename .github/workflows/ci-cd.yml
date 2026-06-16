@@ -136,11 +136,7 @@ jobs:
         run: |
           sleep 10
           HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" -H "Host: api.manakrishi.in" http://${{ secrets.LIGHTSAIL_HOST }}/health/ || echo "000")
-          if [ "$HTTP_CODE" = "200" ]; then
-            echo "✅ Health check passed"
-          else
-            echo "⚠️ Health check returned $HTTP_CODE (non-blocking)"
-          fi
+          echo "Health check returned: $HTTP_CODE"
 
   # ─── Deploy Staging ────────────────────────────────────────────────────────
   deploy-staging:
