@@ -258,8 +258,14 @@ def delete_account(request):
 @api_view(['GET'])
 @permission_classes([IsAuthenticated])
 def list_operators(request):
-    """List all operators (for area managers)"""
-    operators = User.objects.filter(role='operator').values('id', 'first_name', 'last_name', 'phone', 'address', 'is_active')
+    """List all operators (for area managers) - filterable by district"""
+    qs = User.objects.filter(role='operator')
+    district = request.GET.get('district', '')
+    if district:
+        qs = qs.filter(district__iexact=district)
+    elif request.user.district:
+        qs = qs.filter(district__iexact=request.user.district)
+    operators = qs.values('id', 'first_name', 'last_name', 'phone', 'address', 'district', 'is_active', 'is_on_duty', 'services')
     return Response(list(operators))
 
 
