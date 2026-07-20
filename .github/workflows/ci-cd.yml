@@ -104,9 +104,10 @@ jobs:
             sudo docker compose -f docker-compose.prod.yml down 2>/dev/null || true
             sudo docker compose -f docker-compose.prod.yml up --build -d
 
-            # Wait and migrate
-            sleep 15
+            # Wait for db to be healthy then migrate
+            sleep 20
             sudo docker compose -f docker-compose.prod.yml exec -T web python manage.py migrate --noinput
+            sudo docker compose -f docker-compose.prod.yml exec -T web python manage.py collectstatic --noinput 2>/dev/null || true
 
             # Cleanup
             sudo docker image prune -f

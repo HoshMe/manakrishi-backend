@@ -1,4 +1,19 @@
 services:
+  db:
+    image: postgres:16-alpine
+    restart: always
+    volumes:
+      - postgres_prod:/var/lib/postgresql/data
+    environment:
+      POSTGRES_DB: manakrishi
+      POSTGRES_USER: manakrishi
+      POSTGRES_PASSWORD: ${DB_PASSWORD}
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U manakrishi"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
   web:
     build:
       context: .
@@ -8,7 +23,10 @@ services:
     env_file:
       - .env.prod
     depends_on:
-      - redis
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_started
     restart: always
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8000/health/"]
@@ -30,8 +48,10 @@ services:
     env_file:
       - .env.prod
     depends_on:
-      - redis
-      - web
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_started
     restart: always
 
   celery-beat:
@@ -42,8 +62,10 @@ services:
     env_file:
       - .env.prod
     depends_on:
-      - redis
-      - web
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_started
     restart: always
 
   nginx:
@@ -69,6 +91,7 @@ services:
     restart: always
 
 volumes:
+  postgres_prod:
   redis_prod:
   certbot_www:
   certbot_certs:

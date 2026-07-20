@@ -69,20 +69,18 @@ WSGI_APPLICATION = 'config.wsgi.application'
 DATABASE_URL = os.environ.get('DATABASE_URL')
 
 if DATABASE_URL:
-    # Neon DB (production) - parse connection string
     import dj_database_url
     DATABASES = {
         'default': dj_database_url.parse(DATABASE_URL, conn_max_age=600, ssl_require=True)
     }
 else:
-    # Local PostgreSQL (Docker dev)
     DATABASES = {
         'default': {
             'ENGINE': 'django.db.backends.postgresql',
             'NAME': os.environ.get('DB_NAME', 'manakrishi'),
-            'USER': os.environ.get('DB_USER', 'postgres'),
+            'USER': os.environ.get('DB_USER', 'manakrishi'),
             'PASSWORD': os.environ.get('DB_PASSWORD', 'postgres'),
-            'HOST': os.environ.get('DB_HOST', 'localhost'),
+            'HOST': os.environ.get('DB_HOST', 'db'),
             'PORT': os.environ.get('DB_PORT', '5432'),
         }
     }
