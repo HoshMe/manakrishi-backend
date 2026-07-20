@@ -7,7 +7,7 @@ services:
     environment:
       POSTGRES_DB: manakrishi
       POSTGRES_USER: manakrishi
-      POSTGRES_PASSWORD: ${DB_PASSWORD}
+      POSTGRES_PASSWORD: Manakrishi@2024#Prod
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U manakrishi"]
       interval: 10s
