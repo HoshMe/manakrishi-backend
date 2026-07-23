@@ -8,7 +8,6 @@ class User(AbstractUser):
         ('operator', 'Operator'),
         ('dealer', 'Dealer'),
         ('manager', 'Area Manager'),
-        ('admin', 'Admin'),
     ]
 
     phone = models.CharField(max_length=15, unique=True, null=True, blank=True)

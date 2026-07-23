@@ -7,6 +7,7 @@ urlpatterns = [
     path('verify-otp/', views.verify_otp),
     path('verify-otp-only/', views.verify_otp_only),
     path('login/', views.login_password),
+    path('admin-login/', views.admin_login),
     path('login/biometric/', views.login_biometric),
     path('google-login/', views.google_login),
     path('signup/', views.signup),

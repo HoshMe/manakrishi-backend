@@ -28,7 +28,7 @@ class BookingViewSet(viewsets.ModelViewSet, IsRole):
             return Booking.objects.filter(operator=user)
         elif user.role == 'dealer':
             return Booking.objects.filter(dealer=user)
-        elif user.role in ('manager', 'admin'):
+        elif user.role == 'manager':
             return Booking.objects.all()
         return Booking.objects.none()
 
@@ -90,7 +90,7 @@ class BookingViewSet(viewsets.ModelViewSet, IsRole):
 
     @action(detail=True, methods=['post'])
     def assign_operator(self, request, pk=None):
-        if not self.check_role(request, ['manager', 'admin']):
+        if not self.check_role(request, ['manager']):
             return Response({'error': 'Not authorized'}, status=status.HTTP_403_FORBIDDEN)
         booking = self.get_object()
         operator_id = request.data.get('operator_id')
@@ -117,8 +117,8 @@ class BookingViewSet(viewsets.ModelViewSet, IsRole):
 
     @action(detail=False, methods=['get'])
     def stats(self, request):
-        """Dashboard stats for managers/admin"""
-        if not self.check_role(request, ['manager', 'admin']):
+        """Dashboard stats for managers"""
+        if not self.check_role(request, ['manager']):
             return Response({'error': 'Not authorized'}, status=status.HTTP_403_FORBIDDEN)
         from accounts.models import User
         qs = Booking.objects.all()
@@ -182,7 +182,7 @@ def service_pricing(request):
             pricing[svc] = float(db_prices.get(svc, default))
         return Response(pricing)
 
-    if request.user.role not in ('admin', 'manager'):
+    if request.user.role != 'manager':
         return Response({'error': 'Not authorized'}, status=status.HTTP_403_FORBIDDEN)
     for svc, price in request.data.items():
         if svc in DEFAULT_PRICING:
@@ -195,11 +195,11 @@ def service_pricing(request):
 def update_user_role(request):
     """Update user role - admin/manager only"""
     from accounts.models import User
-    if request.user.role not in ('admin', 'manager'):
+    if request.user.role != 'manager':
         return Response({'error': 'Not authorized'}, status=status.HTTP_403_FORBIDDEN)
     user_id = request.data.get('user_id')
     new_role = request.data.get('role')
-    valid_roles = ['farmer', 'operator', 'dealer', 'manager', 'admin']
+    valid_roles = ['farmer', 'operator', 'dealer', 'manager']
     if new_role not in valid_roles:
         return Response({'error': 'Invalid role'}, status=status.HTTP_400_BAD_REQUEST)
     user = User.objects.filter(id=user_id).first()

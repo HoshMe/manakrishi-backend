@@ -283,8 +283,8 @@ def dealer_farmers(request):
 @api_view(['GET'])
 @permission_classes([IsAuthenticated])
 def list_all_users(request):
-    """List all users - admin only. Supports ?role= filter"""
-    if request.user.role not in ('admin', 'manager'):
+    """List all users - manager only. Supports ?role= filter"""
+    if request.user.role != 'manager':
         return Response({'error': 'Not authorized'}, status=status.HTTP_403_FORBIDDEN)
     
     role = request.GET.get('role', '')
@@ -341,7 +341,7 @@ def documents(request):
 @permission_classes([IsAuthenticated])
 def kyc_pending(request):
     """List all pending KYC documents - admin only"""
-    if request.user.role not in ('admin', 'manager'):
+    if request.user.role != 'manager':
         return Response({'error': 'Not authorized'}, status=status.HTTP_403_FORBIDDEN)
     from .models import KYCDocument
     docs = KYCDocument.objects.filter(status='pending').select_related('user')
@@ -362,7 +362,7 @@ def kyc_pending(request):
 @permission_classes([IsAuthenticated])
 def kyc_review(request):
     """Approve or reject KYC document - admin only"""
-    if request.user.role not in ('admin', 'manager'):
+    if request.user.role != 'manager':
         return Response({'error': 'Not authorized'}, status=status.HTTP_403_FORBIDDEN)
     from .models import KYCDocument
     from django.utils import timezone
@@ -490,6 +490,25 @@ def login_biometric(request):
     )
     if not valid:
         return Response({'error': 'Invalid biometric credentials'}, status=status.HTTP_401_UNAUTHORIZED)
+
+    tokens = get_tokens_for_user(user)
+    return Response({'tokens': tokens, 'user': UserSerializer(user).data})
+
+
+# ─── Admin Login (superuser only) ────────────────────────────────────────────
+
+@api_view(['POST'])
+@permission_classes([AllowAny])
+def admin_login(request):
+    phone = request.data.get('phone', '').strip()
+    password = request.data.get('password', '')
+
+    if not phone or not password:
+        return Response({'error': 'Phone and password required'}, status=status.HTTP_400_BAD_REQUEST)
+
+    user = User.objects.filter(phone=phone).first()
+    if not user or not user.is_superuser or not user.check_password(password):
+        return Response({'error': 'Invalid credentials'}, status=status.HTTP_401_UNAUTHORIZED)
 
     tokens = get_tokens_for_user(user)
     return Response({'tokens': tokens, 'user': UserSerializer(user).data})

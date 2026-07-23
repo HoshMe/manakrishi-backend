@@ -14,7 +14,7 @@ class SignupSerializer(serializers.Serializer):
     phone = serializers.CharField(max_length=15, required=False, allow_blank=True)
     email = serializers.EmailField(required=False, allow_blank=True)
     password = serializers.CharField(max_length=128, required=False, allow_blank=True)
-    role = serializers.ChoiceField(choices=['farmer', 'operator', 'dealer', 'admin'])
+    role = serializers.ChoiceField(choices=['farmer', 'operator', 'dealer', 'manager'])
     state = serializers.CharField(max_length=50, required=False, allow_blank=True)
     district = serializers.CharField(max_length=50, required=False, allow_blank=True)
     services = serializers.ListField(child=serializers.CharField(), required=False, default=list)
