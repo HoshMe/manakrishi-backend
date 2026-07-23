@@ -54,18 +54,15 @@ class BookingViewSet(viewsets.ModelViewSet, IsRole):
         service = data.get('service', '')
         area = float(data.get('area_acres', 0))
 
-        # Pricing per acre/unit
+        # Pricing per acre/unit - use DB pricing if available
         pricing = {
-            'drone_spraying': 600,
-            'tractor_rental': 700,
-            'rotavator': 500,
-            'harvester': 1000,
-            'seed_drill': 400,
-            'water_tanker': 800,
-            'cultivator': 450,
-            'fertilizer_spraying': 550,
+            'drone_spraying': 600, 'tractor_rental': 700, 'rotavator': 500,
+            'harvester': 1000, 'seed_drill': 400, 'water_tanker': 800,
+            'cultivator': 450, 'fertilizer_spraying': 550,
         }
-        rate = pricing.get(service, 500)
+        from .models import ServicePricing
+        db_price = ServicePricing.objects.filter(service=service).first()
+        rate = float(db_price.price_per_acre) if db_price else pricing.get(service, 500)
         amount = rate * area
 
         # Create booking in 'pending' status - waiting for operator to accept
@@ -166,6 +163,51 @@ def rate_booking(request):
         review=review_text,
     )
     return Response({'status': 'ok', 'message': 'Rating submitted'})
+
+
+@api_view(['GET', 'POST'])
+@permission_classes([IsAuthenticated])
+def service_pricing(request):
+    """Get or update service pricing - admin/manager only for POST"""
+    from .models import ServicePricing
+    DEFAULT_PRICING = {
+        'drone_spraying': 600, 'tractor_rental': 700, 'rotavator': 500,
+        'harvester': 1000, 'seed_drill': 400, 'water_tanker': 800,
+        'cultivator': 450, 'fertilizer_spraying': 550,
+    }
+    if request.method == 'GET':
+        pricing = {}
+        db_prices = {p.service: p.price_per_acre for p in ServicePricing.objects.all()}
+        for svc, default in DEFAULT_PRICING.items():
+            pricing[svc] = float(db_prices.get(svc, default))
+        return Response(pricing)
+
+    if request.user.role not in ('admin', 'manager'):
+        return Response({'error': 'Not authorized'}, status=status.HTTP_403_FORBIDDEN)
+    for svc, price in request.data.items():
+        if svc in DEFAULT_PRICING:
+            ServicePricing.objects.update_or_create(service=svc, defaults={'price_per_acre': price})
+    return Response({'status': 'updated'})
+
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
+def update_user_role(request):
+    """Update user role - admin/manager only"""
+    from accounts.models import User
+    if request.user.role not in ('admin', 'manager'):
+        return Response({'error': 'Not authorized'}, status=status.HTTP_403_FORBIDDEN)
+    user_id = request.data.get('user_id')
+    new_role = request.data.get('role')
+    valid_roles = ['farmer', 'operator', 'dealer', 'manager', 'admin']
+    if new_role not in valid_roles:
+        return Response({'error': 'Invalid role'}, status=status.HTTP_400_BAD_REQUEST)
+    user = User.objects.filter(id=user_id).first()
+    if not user:
+        return Response({'error': 'User not found'}, status=status.HTTP_404_NOT_FOUND)
+    user.role = new_role
+    user.save()
+    return Response({'status': 'updated', 'user_id': user_id, 'role': new_role})
 
 
 @api_view(['GET'])
