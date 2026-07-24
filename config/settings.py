@@ -128,7 +128,10 @@ DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
 # ─── CORS ─────────────────────────────────────────────────────────────────────
 
 CORS_ALLOW_ALL_ORIGINS = DEBUG
-CORS_ALLOWED_ORIGINS = os.environ.get('CORS_ORIGINS', 'http://localhost:3000').split(',')
+CORS_ALLOWED_ORIGINS = os.environ.get(
+    'CORS_ORIGINS',
+    'http://localhost:3000,https://manakrishi-admin.pages.dev'
+).split(',')
 
 # ─── REST Framework ──────────────────────────────────────────────────────────
 
