@@ -8,6 +8,7 @@ class User(AbstractUser):
         ('operator', 'Operator'),
         ('dealer', 'Dealer'),
         ('manager', 'Area Manager'),
+        ('admin', 'Admin'),
     ]
 
     phone = models.CharField(max_length=15, unique=True, null=True, blank=True)
@@ -28,6 +29,11 @@ class User(AbstractUser):
 
     USERNAME_FIELD = 'phone'
     REQUIRED_FIELDS = ['username']
+
+    def save(self, *args, **kwargs):
+        if self.is_superuser:
+            self.role = 'admin'
+        super().save(*args, **kwargs)
 
     def __str__(self):
         return f"{self.get_full_name()} ({self.role})"
