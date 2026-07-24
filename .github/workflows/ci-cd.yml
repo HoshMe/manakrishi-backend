@@ -112,30 +112,8 @@ jobs:
             # Cleanup
             sudo docker image prune -f
 
-            # Auto-generate SSL if not exists and domain is set
-            DOMAIN="${{ secrets.DOMAIN }}"
-            if [ -n "$DOMAIN" ]; then
-              # Check if cert already exists
-              CERT_EXISTS=$(sudo docker volume inspect manakrishi_certbot_certs > /dev/null 2>&1 && sudo docker run --rm -v manakrishi_certbot_certs:/certs alpine sh -c "test -f /certs/live/$DOMAIN/fullchain.pem && echo yes || echo no" 2>/dev/null || echo "no")
-              if [ "$CERT_EXISTS" = "no" ]; then
-                echo "Generating SSL cert for $DOMAIN..."
-                sudo docker compose -f docker-compose.prod.yml stop nginx 2>/dev/null || true
-                sleep 2
-                sudo docker run --rm \
-                  -v manakrishi_certbot_certs:/etc/letsencrypt \
-                  -p 80:80 \
-                  certbot/certbot certonly --standalone \
-                  --email admin@$DOMAIN --agree-tos --no-eff-email \
-                  --non-interactive -d $DOMAIN && CERT_EXISTS="yes" || echo "SSL generation failed"
-              fi
-              # Always apply SSL config if cert exists
-              if [ "$CERT_EXISTS" = "yes" ]; then
-                echo "Enabling HTTPS for $DOMAIN..."
-                cd /opt/manakrishi
-                sed "s/DOMAIN_PLACEHOLDER/$DOMAIN/g" docker/nginx-ssl.conf > docker/nginx.conf
-                sudo docker compose -f docker-compose.prod.yml up -d nginx
-              fi
-            fi
+            # Restart nginx to pick up latest nginx.conf (SSL config is baked in)
+            sudo docker compose -f docker-compose.prod.yml up -d nginx
 
             echo "✅ Deployed"
 
