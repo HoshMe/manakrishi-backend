@@ -284,7 +284,7 @@ def dealer_farmers(request):
 @permission_classes([IsAuthenticated])
 def list_all_users(request):
     """List all users - manager only. Supports ?role= filter"""
-    if request.user.role != 'manager':
+    if request.user.role != 'manager' and not request.user.is_superuser:
         return Response({'error': 'Not authorized'}, status=status.HTTP_403_FORBIDDEN)
     
     role = request.GET.get('role', '')
@@ -341,7 +341,7 @@ def documents(request):
 @permission_classes([IsAuthenticated])
 def kyc_pending(request):
     """List all pending KYC documents - admin only"""
-    if request.user.role != 'manager':
+    if request.user.role != 'manager' and not request.user.is_superuser:
         return Response({'error': 'Not authorized'}, status=status.HTTP_403_FORBIDDEN)
     from .models import KYCDocument
     docs = KYCDocument.objects.filter(status='pending').select_related('user')
@@ -362,7 +362,7 @@ def kyc_pending(request):
 @permission_classes([IsAuthenticated])
 def kyc_review(request):
     """Approve or reject KYC document - admin only"""
-    if request.user.role != 'manager':
+    if request.user.role != 'manager' and not request.user.is_superuser:
         return Response({'error': 'Not authorized'}, status=status.HTTP_403_FORBIDDEN)
     from .models import KYCDocument
     from django.utils import timezone
