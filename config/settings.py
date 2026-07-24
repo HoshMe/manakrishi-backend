@@ -132,6 +132,10 @@ CORS_ALLOWED_ORIGINS = os.environ.get(
     'CORS_ORIGINS',
     'http://localhost:3000,https://manakrishi-admin.pages.dev'
 ).split(',')
+CORS_ALLOW_HEADERS = [
+    'accept', 'authorization', 'content-type',
+    'user-agent', 'x-csrftoken', 'x-requested-with', 'x-api-key',
+]
 
 # ─── REST Framework ──────────────────────────────────────────────────────────
 
