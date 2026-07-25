@@ -97,7 +97,7 @@ jobs:
             fi
 
             # Write env and firebase creds
-            echo "${{ secrets.ENV_PROD }}" > .env.prod
+            printf '%s' "${{ secrets.ENV_PROD }}" > .env.prod
             echo '${{ secrets.FIREBASE_CREDENTIALS }}' > firebase-credentials.json
 
             # Deploy
