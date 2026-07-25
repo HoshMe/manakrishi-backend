@@ -8,7 +8,6 @@ from rest_framework.decorators import api_view, permission_classes
 from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.response import Response
 from rest_framework_simplejwt.tokens import RefreshToken
-import boto3
 
 from .models import User, OTP
 from .serializers import (
@@ -49,26 +48,9 @@ def send_otp(request):
     OTP.objects.filter(phone=phone, is_used=False).update(is_used=True)
     OTP.objects.create(phone=phone, otp=otp_code, expires_at=expires_at)
 
-    # Send via AWS
-    try:
-        client = boto3.client(
-            'pinpoint-sms-voice-v2',
-            region_name=settings.AWS_REGION,
-            aws_access_key_id=settings.AWS_SMS_ACCESS_KEY_ID,
-            aws_secret_access_key=settings.AWS_SMS_SECRET_ACCESS_KEY,
-        )
-        client.send_text_message(
-            DestinationPhoneNumber=phone,
-            OriginationIdentity=settings.AWS_SMS_ORIGINATION_ID,
-            MessageBody=f'Your ManaKrishi OTP is: {otp_code}. Valid for 5 minutes.',
-            MessageType='TRANSACTIONAL',
-        )
-    except Exception as e:
-        if settings.DEBUG:
-            return Response({'message': f'DEV: OTP is {otp_code}', 'debug_otp': otp_code})
-        return Response({'error': str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
-
-    return Response({'message': 'OTP sent successfully'})
+    if settings.DEBUG:
+        return Response({'message': f'DEV: OTP is {otp_code}', 'debug_otp': otp_code})
+    return Response({'error': 'SMS not configured'}, status=status.HTTP_503_SERVICE_UNAVAILABLE)
 
 
 @api_view(['POST'])

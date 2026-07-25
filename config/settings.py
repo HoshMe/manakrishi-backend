@@ -180,13 +180,6 @@ CELERY_TIMEZONE = TIME_ZONE
 RAZORPAY_KEY_ID = os.environ.get('RAZORPAY_KEY_ID', '<RAZORPAY_KEY_ID>')
 RAZORPAY_KEY_SECRET = os.environ.get('RAZORPAY_KEY_SECRET', '<RAZORPAY_KEY_SECRET>')
 
-# ─── AWS End User Messaging (SMS OTP) ────────────────────────────────────────
-
-AWS_REGION = os.environ.get('AWS_REGION', 'ap-south-1')
-AWS_SMS_ACCESS_KEY_ID = os.environ.get('AWS_ACCESS_KEY_ID', '')
-AWS_SMS_SECRET_ACCESS_KEY = os.environ.get('AWS_SECRET_ACCESS_KEY', '')
-AWS_SMS_ORIGINATION_ID = os.environ.get('AWS_SMS_ORIGINATION_ID', '')
-
 # ─── WhatsApp Business API (Meta Cloud API) ───────────────────────────────
 
 WHATSAPP_PHONE_NUMBER_ID = os.environ.get('WHATSAPP_PHONE_NUMBER_ID', '')
