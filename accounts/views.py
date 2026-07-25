@@ -54,8 +54,8 @@ def send_otp(request):
         client = boto3.client(
             'pinpoint-sms-voice-v2',
             region_name=settings.AWS_REGION,
-            aws_access_key_id=settings.AWS_ACCESS_KEY_ID,
-            aws_secret_access_key=settings.AWS_SECRET_ACCESS_KEY,
+            aws_access_key_id=settings.AWS_SMS_ACCESS_KEY_ID,
+            aws_secret_access_key=settings.AWS_SMS_SECRET_ACCESS_KEY,
         )
         client.send_text_message(
             DestinationPhoneNumber=phone,

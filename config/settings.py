@@ -102,26 +102,18 @@ STATIC_URL = 'static/'
 STATIC_ROOT = BASE_DIR / 'staticfiles'
 STATICFILES_STORAGE = 'whitenoise.storage.CompressedManifestStaticFilesStorage'
 
-# ─── Media / File Storage — Cloudflare R2 ────────────────────────────────────
+# ─── Media / File Storage — Cloudflare R2 ────────────────────────────────────────────
 
-R2_ENDPOINT_URL = os.environ.get('R2_ENDPOINT_URL')
-R2_ACCESS_KEY_ID = os.environ.get('R2_ACCESS_KEY_ID')
-R2_SECRET_ACCESS_KEY = os.environ.get('R2_SECRET_ACCESS_KEY')
+R2_ENDPOINT_URL = os.environ.get('R2_ENDPOINT_URL', '')
+R2_ACCESS_KEY_ID = os.environ.get('R2_ACCESS_KEY_ID', '')
+R2_SECRET_ACCESS_KEY = os.environ.get('R2_SECRET_ACCESS_KEY', '')
+R2_BUCKET_NAME = os.environ.get('R2_BUCKET_NAME', 'manakrishi')
+R2_PUBLIC_URL = os.environ.get('R2_PUBLIC_URL', '')
 
 if R2_ENDPOINT_URL and R2_ACCESS_KEY_ID and R2_SECRET_ACCESS_KEY:
-    # Cloudflare R2 (S3-compatible) for media uploads
-    DEFAULT_FILE_STORAGE = 'storages.backends.s3boto3.S3Boto3Storage'
-    AWS_S3_ENDPOINT_URL = R2_ENDPOINT_URL
-    AWS_ACCESS_KEY_ID = R2_ACCESS_KEY_ID
-    AWS_SECRET_ACCESS_KEY = R2_SECRET_ACCESS_KEY
-    AWS_STORAGE_BUCKET_NAME = os.environ.get('R2_BUCKET_NAME', 'manakrishi')
-    AWS_S3_CUSTOM_DOMAIN = os.environ.get('R2_PUBLIC_URL', '').replace('https://', '')
-    AWS_DEFAULT_ACL = None
-    AWS_S3_OBJECT_PARAMETERS = {'CacheControl': 'max-age=86400'}
-    AWS_QUERYSTRING_AUTH = False
-    MEDIA_URL = f"{os.environ.get('R2_PUBLIC_URL', '')}/"
+    DEFAULT_FILE_STORAGE = 'config.storage.R2Storage'
+    MEDIA_URL = f'{R2_PUBLIC_URL}/'
 else:
-    # Local file storage (dev or when R2 not configured)
     MEDIA_URL = '/media/'
     MEDIA_ROOT = BASE_DIR / 'media'
 
