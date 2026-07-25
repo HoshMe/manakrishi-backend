@@ -25,6 +25,7 @@ class User(AbstractUser):
     biometric_devices = models.JSONField(default=list, blank=True)
     is_on_duty = models.BooleanField(default=False)
     is_verified = models.BooleanField(default=False)
+    needs_license = models.BooleanField(default=False)
     created_at = models.DateTimeField(auto_now_add=True)
 
     USERNAME_FIELD = 'phone'
