@@ -4,6 +4,7 @@ from rest_framework.decorators import action, api_view, permission_classes
 from rest_framework.response import Response
 from rest_framework.permissions import IsAuthenticated, AllowAny
 
+from accounts.models import User
 from .models import Booking
 from .serializers import BookingSerializer, CreateBookingSerializer
 from notifications.tasks import send_booking_notification
@@ -69,12 +70,30 @@ class BookingViewSet(viewsets.ModelViewSet, IsRole):
         # If dealer is creating on behalf of a farmer, set dealer field
         if self.request.user.role == 'dealer':
             farmer_id = self.request.data.get('farmer_id')
+            farmer_phone = self.request.data.get('farmer_phone', '').strip()
+            farmer_name = self.request.data.get('farmer_name', '').strip()
+            farmer = None
+
             if farmer_id:
-                from accounts.models import User
                 farmer = User.objects.filter(id=farmer_id, role='farmer').first()
-                booking = serializer.save(farmer=farmer or self.request.user, dealer=self.request.user, status='pending', amount=amount)
-            else:
-                booking = serializer.save(farmer=self.request.user, dealer=self.request.user, status='pending', amount=amount)
+            elif farmer_phone:
+                farmer = User.objects.filter(phone=farmer_phone).first()
+                if not farmer:
+                    name_parts = farmer_name.split(' ', 1)
+                    farmer = User.objects.create_user(
+                        username=farmer_phone,
+                        phone=farmer_phone,
+                        first_name=name_parts[0],
+                        last_name=name_parts[1] if len(name_parts) > 1 else '',
+                        role='farmer',
+                    )
+
+            booking = serializer.save(
+                farmer=farmer or self.request.user,
+                dealer=self.request.user,
+                status='pending',
+                amount=amount,
+            )
         else:
             booking = serializer.save(farmer=self.request.user, status='pending', amount=amount)
         # Calculate commission (10% for dealer)
@@ -120,7 +139,6 @@ class BookingViewSet(viewsets.ModelViewSet, IsRole):
         """Dashboard stats for managers"""
         if not self.check_role(request, ['manager']):
             return Response({'error': 'Not authorized'}, status=status.HTTP_403_FORBIDDEN)
-        from accounts.models import User
         qs = Booking.objects.all()
         return Response({
             'total_bookings': qs.count(),
@@ -194,7 +212,6 @@ def service_pricing(request):
 @permission_classes([IsAuthenticated])
 def update_user_role(request):
     """Update user role - admin/manager only"""
-    from accounts.models import User
     if request.user.role not in ('manager', 'admin'):
         return Response({'error': 'Not authorized'}, status=status.HTTP_403_FORBIDDEN)
     user_id = request.data.get('user_id')
@@ -248,7 +265,6 @@ def service_info(request):
 @permission_classes([IsAuthenticated])
 def check_operators(request):
     import math, re
-    from accounts.models import User
     service = request.GET.get('service', '')
     district = request.GET.get('district', request.user.district or '')
     lat = request.GET.get('lat')
