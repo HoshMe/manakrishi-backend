@@ -26,10 +26,20 @@ class BookingViewSet(viewsets.ModelViewSet, IsRole):
         if user.role == 'farmer':
             return Booking.objects.filter(farmer=user)
         elif user.role == 'operator':
+            if user.district:
+                # Show assigned bookings + pending bookings from their district
+                return Booking.objects.filter(
+                    models.Q(operator=user) |
+                    models.Q(status='pending', farmer__district__iexact=user.district)
+                ).distinct()
             return Booking.objects.filter(operator=user)
         elif user.role == 'dealer':
             return Booking.objects.filter(dealer=user)
-        elif user.role in ('manager', 'admin'):
+        elif user.role == 'manager':
+            if user.district:
+                return Booking.objects.filter(farmer__district__iexact=user.district)
+            return Booking.objects.all()
+        elif user.role == 'admin':
             return Booking.objects.all()
         return Booking.objects.none()
 
@@ -50,24 +60,6 @@ class BookingViewSet(viewsets.ModelViewSet, IsRole):
         return Response(BookingSerializer(booking).data, status=status.HTTP_201_CREATED)
 
     def perform_create(self, serializer):
-        # Calculate amount based on service and area
-        data = serializer.validated_data
-        service = data.get('service', '')
-        area = float(data.get('area_acres', 0))
-
-        # Pricing per acre/unit - use DB pricing if available
-        pricing = {
-            'drone_spraying': 600, 'tractor_rental': 700, 'rotavator': 500,
-            'harvester': 1000, 'seed_drill': 400, 'water_tanker': 800,
-            'cultivator': 450, 'fertilizer_spraying': 550,
-        }
-        from .models import ServicePricing
-        db_price = ServicePricing.objects.filter(service=service).first()
-        rate = float(db_price.price_per_acre) if db_price else pricing.get(service, 500)
-        amount = rate * area
-
-        # Create booking in 'pending' status - waiting for operator to accept
-        # If dealer is creating on behalf of a farmer, set dealer field
         if self.request.user.role == 'dealer':
             farmer_id = self.request.data.get('farmer_id')
             farmer_phone = self.request.data.get('farmer_phone', '').strip()
@@ -87,24 +79,33 @@ class BookingViewSet(viewsets.ModelViewSet, IsRole):
                         last_name=name_parts[1] if len(name_parts) > 1 else '',
                         role='farmer',
                     )
+            elif farmer_name:
+                # No phone — create a phoneless farmer record using name + dealer context
+                import uuid
+                name_parts = farmer_name.split(' ', 1)
+                farmer = User.objects.create_user(
+                    username=f'farmer_{uuid.uuid4().hex[:8]}',
+                    first_name=name_parts[0],
+                    last_name=name_parts[1] if len(name_parts) > 1 else '',
+                    role='farmer',
+                )
+
+            if not farmer:
+                from rest_framework.exceptions import ValidationError
+                raise ValidationError({'farmer_name': 'Farmer name is required'})
 
             booking = serializer.save(
-                farmer=farmer or self.request.user,
+                farmer=farmer,
                 dealer=self.request.user,
                 status='pending',
-                amount=amount,
+                amount=0,
             )
         else:
-            booking = serializer.save(farmer=self.request.user, status='pending', amount=amount)
-        # Calculate commission (10% for dealer)
-        if booking.dealer:
-            booking.commission_amount = booking.amount * 0.10
-            booking.save()
+            booking = serializer.save(farmer=self.request.user, status='pending', amount=0)
 
-        # Dispatch to nearby operators (like taxi booking)
+        # Dispatch to nearby operators
         from notifications.tasks import assign_booking_to_nearby_operators
         assign_booking_to_nearby_operators.delay(booking.id)
-
         send_booking_notification.delay(booking.id, 'booking_confirmed')
 
     @action(detail=True, methods=['post'])
@@ -136,18 +137,23 @@ class BookingViewSet(viewsets.ModelViewSet, IsRole):
 
     @action(detail=False, methods=['get'])
     def stats(self, request):
-        """Dashboard stats for managers"""
+        """Dashboard stats for managers — scoped to their district"""
         if not self.check_role(request, ['manager']):
             return Response({'error': 'Not authorized'}, status=status.HTTP_403_FORBIDDEN)
-        qs = Booking.objects.all()
+        district = request.user.district
+        qs = Booking.objects.filter(farmer__district__iexact=district) if district else Booking.objects.all()
+        op_qs = User.objects.filter(role='operator', district__iexact=district) if district else User.objects.filter(role='operator')
+        farmer_qs = User.objects.filter(role='farmer', district__iexact=district) if district else User.objects.filter(role='farmer')
+        dealer_qs = User.objects.filter(role='dealer', district__iexact=district) if district else User.objects.filter(role='dealer')
         return Response({
             'total_bookings': qs.count(),
             'in_progress': qs.filter(status='in_progress').count(),
             'completed': qs.filter(status='completed').count(),
             'total_revenue': float(qs.filter(status='completed').aggregate(s=models.Sum('amount'))['s'] or 0),
-            'total_partners': User.objects.filter(role='operator').count(),
-            'total_farmers': User.objects.filter(role='farmer').count(),
-            'total_dealers': User.objects.filter(role='dealer').count(),
+            'total_partners': op_qs.count(),
+            'total_farmers': farmer_qs.count(),
+            'total_dealers': dealer_qs.count(),
+            'district': district,
         })
 
 
@@ -229,7 +235,45 @@ def update_user_role(request):
 
 @api_view(['GET'])
 @permission_classes([AllowAny])
-def crops_list(request):
+def track_booking(request):
+    """Public endpoint — look up booking by booking_id or farmer phone. No auth required."""
+    booking_id = request.GET.get('booking_id', '').strip()
+    phone = request.GET.get('phone', '').strip()
+
+    if not booking_id and not phone:
+        return Response({'error': 'Provide booking_id or phone'}, status=status.HTTP_400_BAD_REQUEST)
+
+    if booking_id:
+        qs = Booking.objects.filter(booking_id__iexact=booking_id)
+    else:
+        qs = Booking.objects.filter(farmer__phone=phone).order_by('-created_at')
+
+    if not qs.exists():
+        return Response({'error': 'No bookings found'}, status=status.HTTP_404_NOT_FOUND)
+
+    def fmt(b):
+        return {
+            'booking_id': b.booking_id,
+            'service': b.service.replace('_', ' ').title(),
+            'crop': b.crop,
+            'area_acres': str(b.area_acres),
+            'scheduled_date': str(b.scheduled_date),
+            'scheduled_time': b.scheduled_time,
+            'location_address': b.location_address,
+            'status': b.status,
+            'amount': str(b.amount),
+            'farmer_name': b.farmer.get_full_name() if b.farmer else '',
+            'operator_name': b.operator.get_full_name() if b.operator else None,
+            'operator_phone': b.operator.phone if b.operator else None,
+            'created_at': b.created_at.strftime('%d %b %Y'),
+        }
+
+    if booking_id:
+        return Response(fmt(qs.first()))
+    return Response([fmt(b) for b in qs[:10]])
+
+
+
     """Return available crops from database"""
     from .models import Crop
     crops = list(Crop.objects.filter(is_active=True).values_list('name', flat=True))
@@ -295,42 +339,57 @@ def check_operators(request):
 @api_view(['POST'])
 @permission_classes([IsAuthenticated])
 def accept_booking(request):
-    """Operator accepts a pending booking - first come first served"""
+    """Operator/lead partner accepts a pending booking and sets the price"""
     import redis
     from django.conf import settings as s
 
     booking_id = request.data.get('booking_id')
-    if request.user.role != 'operator':
-        return Response({'error': 'Only operators can accept bookings'}, status=status.HTTP_403_FORBIDDEN)
+    price = request.data.get('price')
+
+    if request.user.role not in ('operator', 'dealer'):
+        return Response({'error': 'Only operators or lead partners can accept bookings'}, status=status.HTTP_403_FORBIDDEN)
+
+    if not price:
+        return Response({'error': 'price is required'}, status=status.HTTP_400_BAD_REQUEST)
+
+    try:
+        price = float(price)
+        if price <= 0:
+            raise ValueError
+    except (ValueError, TypeError):
+        return Response({'error': 'price must be a positive number'}, status=status.HTTP_400_BAD_REQUEST)
 
     booking = Booking.objects.filter(booking_id=booking_id, status='pending').first()
     if not booking:
         return Response({'error': 'Booking not available or already taken'}, status=status.HTTP_400_BAD_REQUEST)
 
-    # Check if this operator was notified (optional - can remove for open dispatch)
-    r = redis.from_url(s.REDIS_URL)
-    notified = r.get(f'booking:{booking_id}:notified')
-    if notified:
-        notified_ids = notified.decode().split(',')
-        if str(request.user.id) not in notified_ids:
-            return Response({'error': 'This booking was not offered to you'}, status=status.HTTP_403_FORBIDDEN)
+    # Check if this operator was notified (optional)
+    try:
+        r = redis.from_url(s.REDIS_URL)
+        notified = r.get(f'booking:{booking_id}:notified')
+        if notified:
+            notified_ids = notified.decode().split(',')
+            if str(request.user.id) not in notified_ids:
+                return Response({'error': 'This booking was not offered to you'}, status=status.HTTP_403_FORBIDDEN)
+        r.delete(f'booking:{booking_id}:notified')
+    except Exception:
+        pass
 
-    # Assign to this operator (first come first served)
     booking.operator = request.user
     booking.status = 'confirmed'
+    booking.amount = price
+    if booking.dealer:
+        booking.commission_amount = price * 0.10
     booking.save()
 
-    # Clear Redis key so others can't accept
-    r.delete(f'booking:{booking_id}:notified')
-
-    # Notify farmer that operator accepted
     from notifications.tasks import send_booking_notification
     send_booking_notification.delay(booking.id, 'operator_assigned')
 
     return Response({
         'status': 'accepted',
         'booking_id': booking.booking_id,
-        'message': 'Booking assigned to you',
+        'amount': price,
+        'message': 'Booking accepted and price set',
     })
 
 
