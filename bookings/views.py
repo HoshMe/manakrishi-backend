@@ -24,24 +24,30 @@ class BookingViewSet(viewsets.ModelViewSet, IsRole):
     def get_queryset(self):
         user = self.request.user
         if user.role == 'farmer':
-            return Booking.objects.filter(farmer=user)
+            qs = Booking.objects.filter(farmer=user)
         elif user.role == 'operator':
             if user.district:
-                # Show assigned bookings + pending bookings from their district
-                return Booking.objects.filter(
+                qs = Booking.objects.filter(
                     models.Q(operator=user) |
                     models.Q(status='pending', farmer__district__iexact=user.district)
                 ).distinct()
-            return Booking.objects.filter(operator=user)
+            else:
+                qs = Booking.objects.filter(operator=user)
         elif user.role == 'dealer':
-            return Booking.objects.filter(dealer=user)
+            qs = Booking.objects.filter(dealer=user)
         elif user.role == 'manager':
-            if user.district:
-                return Booking.objects.filter(farmer__district__iexact=user.district)
-            return Booking.objects.all()
+            qs = Booking.objects.filter(farmer__district__iexact=user.district) if user.district else Booking.objects.all()
         elif user.role == 'admin':
-            return Booking.objects.all()
-        return Booking.objects.none()
+            qs = Booking.objects.all()
+        else:
+            return Booking.objects.none()
+
+        # Filter by status query param (supports comma-separated values e.g. ?status=confirmed,on_the_way)
+        status_param = self.request.query_params.get('status', '').strip()
+        if status_param:
+            statuses = [s.strip() for s in status_param.split(',') if s.strip()]
+            qs = qs.filter(status__in=statuses)
+        return qs
 
     def get_serializer_class(self):
         if self.action == 'create':
