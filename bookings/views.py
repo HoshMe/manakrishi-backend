@@ -273,12 +273,13 @@ def track_booking(request):
     return Response([fmt(b) for b in qs[:10]])
 
 
-
+@api_view(['GET'])
+@permission_classes([AllowAny])
+def crops_list(request):
     """Return available crops from database"""
     from .models import Crop
     crops = list(Crop.objects.filter(is_active=True).values_list('name', flat=True))
     if not crops:
-        # Fallback if no crops added yet
         crops = ['Paddy', 'Cotton', 'Maize', 'Sugarcane', 'Groundnut', 'Rice', 'Wheat', 'Soybean', 'Chilli', 'Turmeric']
     return Response({'crops': crops})
 
