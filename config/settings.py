@@ -100,7 +100,6 @@ USE_TZ = True
 
 STATIC_URL = 'static/'
 STATIC_ROOT = BASE_DIR / 'staticfiles'
-STATICFILES_STORAGE = 'whitenoise.storage.CompressedManifestStaticFilesStorage'
 
 # ─── Media / File Storage — Cloudflare R2 ────────────────────────────────────────────
 
@@ -111,7 +110,10 @@ R2_BUCKET_NAME = os.environ.get('R2_BUCKET_NAME', 'manakrishi')
 R2_PUBLIC_URL = os.environ.get('R2_PUBLIC_URL', '')
 
 if R2_ENDPOINT_URL and R2_ACCESS_KEY_ID and R2_SECRET_ACCESS_KEY:
-    DEFAULT_FILE_STORAGE = 'config.storage.R2Storage'
+    STORAGES = {
+        'default': {'BACKEND': 'config.storage.R2Storage'},
+        'staticfiles': {'BACKEND': 'whitenoise.storage.CompressedManifestStaticFilesStorage'},
+    }
     MEDIA_URL = f'{R2_PUBLIC_URL}/'
 else:
     MEDIA_URL = '/media/'
