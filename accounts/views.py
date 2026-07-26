@@ -324,51 +324,60 @@ def documents(request):
 @api_view(['GET'])
 @permission_classes([IsAuthenticated])
 def kyc_pending(request):
-    """List all pending KYC documents - admin only"""
+    """List users with pending KYC - admin only"""
     if request.user.role not in ('manager', 'admin'):
         return Response({'error': 'Not authorized'}, status=status.HTTP_403_FORBIDDEN)
     from .models import KYCDocument
-    docs = KYCDocument.objects.filter(status='pending').select_related('user')
-    data = [{
-        'id': d.id,
-        'user_id': d.user.id,
-        'user_name': d.user.get_full_name(),
-        'user_phone': d.user.phone,
-        'doc_type': d.doc_type,
-        'doc_number': d.doc_number,
-        'doc_image': request.build_absolute_uri(d.doc_image.url) if d.doc_image else None,
-        'uploaded_at': d.uploaded_at.strftime('%d %b %Y'),
-    } for d in docs]
+    from django.db.models import Prefetch
+    users_with_pending = User.objects.filter(
+        kyc_documents__status='pending'
+    ).distinct().prefetch_related(
+        Prefetch('kyc_documents', queryset=KYCDocument.objects.all(), to_attr='all_docs')
+    )
+    data = []
+    for user in users_with_pending:
+        docs = {d.doc_type: d for d in user.all_docs}
+        entry = {
+            'user_id': user.id,
+            'user_name': user.get_full_name(),
+            'user_phone': user.phone,
+            'kyc_status': 'verified' if all(d.status == 'approved' for d in docs.values()) and len(docs) >= 2 else (
+                'pending' if any(d.status == 'pending' for d in docs.values()) else 'rejected'
+            ),
+        }
+        for doc_type, d in docs.items():
+            entry[doc_type] = {
+                'id': d.id,
+                'doc_number': d.doc_number,
+                'doc_image': request.build_absolute_uri(d.doc_image.url) if d.doc_image else None,
+                'status': d.status,
+                'remarks': d.remarks,
+                'uploaded_at': d.uploaded_at.strftime('%d %b %Y'),
+            }
+        data.append(entry)
     return Response(data)
 
 
 @api_view(['POST'])
 @permission_classes([IsAuthenticated])
 def kyc_review(request):
-    """Approve or reject KYC document - admin only"""
+    """Approve or reject all KYC documents for a user - admin only"""
     if request.user.role not in ('manager', 'admin'):
         return Response({'error': 'Not authorized'}, status=status.HTTP_403_FORBIDDEN)
     from .models import KYCDocument
-    from django.utils import timezone
-    doc_id = request.data.get('doc_id')
+    user_id = request.data.get('user_id')
     action = request.data.get('action')  # 'approve' or 'reject'
     remarks = request.data.get('remarks', '')
-    if not doc_id or action not in ('approve', 'reject'):
-        return Response({'error': 'doc_id and action (approve/reject) required'}, status=status.HTTP_400_BAD_REQUEST)
-    doc = KYCDocument.objects.filter(id=doc_id).first()
-    if not doc:
-        return Response({'error': 'Document not found'}, status=status.HTTP_404_NOT_FOUND)
-    doc.status = 'approved' if action == 'approve' else 'rejected'
-    doc.remarks = remarks
-    doc.reviewed_at = timezone.now()
-    doc.save()
-    # If both docs approved, mark user as verified
-    user = doc.user
-    approved_count = KYCDocument.objects.filter(user=user, status='approved').count()
-    if approved_count >= 2:
-        user.is_verified = True
-        user.save()
-    return Response({'status': doc.status, 'user_verified': user.is_verified})
+    if not user_id or action not in ('approve', 'reject'):
+        return Response({'error': 'user_id and action (approve/reject) required'}, status=status.HTTP_400_BAD_REQUEST)
+    docs = KYCDocument.objects.filter(user_id=user_id)
+    if not docs.exists():
+        return Response({'error': 'No documents found'}, status=status.HTTP_404_NOT_FOUND)
+    docs.update(status='approved' if action == 'approve' else 'rejected', remarks=remarks)
+    user = User.objects.get(id=user_id)
+    user.is_verified = action == 'approve'
+    user.save()
+    return Response({'status': 'approved' if action == 'approve' else 'rejected', 'user_verified': user.is_verified})
 
 # ─── Password Login ───────────────────────────────────────────────────────────
 
