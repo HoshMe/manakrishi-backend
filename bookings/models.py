@@ -95,3 +95,43 @@ class ServicePricing(models.Model):
 
     def __str__(self):
         return f"{self.service} - ₹{self.price_per_acre}/acre"
+
+
+class CommissionRule(models.Model):
+    """Admin-defined commission rules per service and/or district.
+    More specific rules (service + district) take priority over general ones.
+    """
+    service = models.CharField(max_length=30, choices=Booking.SERVICE_CHOICES, blank=True, help_text='Leave blank to apply to all services')
+    district = models.CharField(max_length=100, blank=True, help_text='Leave blank to apply to all districts')
+    commission_percent = models.DecimalField(max_digits=5, decimal_places=2, help_text='e.g. 10 for 10%')
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ['-service', '-district']  # more specific first
+        unique_together = [('service', 'district')]
+
+    def __str__(self):
+        svc = self.service or 'All Services'
+        dist = self.district or 'All Districts'
+        return f"{svc} / {dist} — {self.commission_percent}%"
+
+    @classmethod
+    def get_rate(cls, service, district):
+        """Return best matching commission percent. Falls back to 10% default."""
+        # Most specific: service + district
+        rule = cls.objects.filter(service=service, district__iexact=district).first()
+        if rule:
+            return float(rule.commission_percent)
+        # Service only
+        rule = cls.objects.filter(service=service, district='').first()
+        if rule:
+            return float(rule.commission_percent)
+        # District only
+        rule = cls.objects.filter(service='', district__iexact=district).first()
+        if rule:
+            return float(rule.commission_percent)
+        # Global fallback
+        rule = cls.objects.filter(service='', district='').first()
+        if rule:
+            return float(rule.commission_percent)
+        return 10.0  # default 10%

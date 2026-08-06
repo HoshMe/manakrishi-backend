@@ -322,7 +322,11 @@ def check_operators(request):
     lng = request.GET.get('lng')
     if not service:
         return Response({'error': 'service is required'}, status=400)
-    service_snake = re.sub(r'([A-Z])', r'_\1', service).lower().lstrip('_')
+    # Handle both camelCase (droneSpraying) and snake_case (drone_spraying)
+    if '_' in service:
+        service_snake = service.lower()
+    else:
+        service_snake = re.sub(r'([A-Z])', r'_\1', service).lower().lstrip('_')
     operators = User.objects.filter(role='operator', is_active=True, is_on_duty=True)
     matching = [op for op in operators if service_snake in (op.services or [])]
     if district:
@@ -346,31 +350,19 @@ def check_operators(request):
 @api_view(['POST'])
 @permission_classes([IsAuthenticated])
 def accept_booking(request):
-    """Operator/lead partner accepts a pending booking and sets the price"""
+    """Operator/lead partner accepts a pending booking"""
     import redis
     from django.conf import settings as s
 
     booking_id = request.data.get('booking_id')
-    price = request.data.get('price')
 
     if request.user.role not in ('operator', 'dealer'):
         return Response({'error': 'Only operators or lead partners can accept bookings'}, status=status.HTTP_403_FORBIDDEN)
-
-    if not price:
-        return Response({'error': 'price is required'}, status=status.HTTP_400_BAD_REQUEST)
-
-    try:
-        price = float(price)
-        if price <= 0:
-            raise ValueError
-    except (ValueError, TypeError):
-        return Response({'error': 'price must be a positive number'}, status=status.HTTP_400_BAD_REQUEST)
 
     booking = Booking.objects.filter(booking_id=booking_id, status='pending').first()
     if not booking:
         return Response({'error': 'Booking not available or already taken'}, status=status.HTTP_400_BAD_REQUEST)
 
-    # Check if this operator was notified (optional)
     try:
         r = redis.from_url(s.REDIS_URL)
         notified = r.get(f'booking:{booking_id}:notified')
@@ -384,9 +376,10 @@ def accept_booking(request):
 
     booking.operator = request.user
     booking.status = 'confirmed'
-    booking.amount = price
     if booking.dealer:
-        booking.commission_amount = price * 0.10
+        from .models import CommissionRule
+        rate = CommissionRule.get_rate(booking.service, booking.farmer.district or '')
+        booking.commission_amount = round(float(booking.amount) * rate / 100, 2)
     booking.save()
 
     from notifications.tasks import send_booking_notification
@@ -395,14 +388,94 @@ def accept_booking(request):
     return Response({
         'status': 'accepted',
         'booking_id': booking.booking_id,
-        'amount': price,
-        'message': 'Booking accepted and price set',
+        'amount': booking.amount,
+        'message': 'Booking accepted',
     })
 
 
 @api_view(['POST'])
 @permission_classes([IsAuthenticated])
+def set_booking_price(request):
+    """Admin/manager sets price on a booking — anytime or after receiving it"""
+    if request.user.role not in ('manager', 'admin'):
+        return Response({'error': 'Not authorized'}, status=status.HTTP_403_FORBIDDEN)
+
+    booking_id = request.data.get('booking_id')
+    price = request.data.get('price')
+
+    if not price:
+        return Response({'error': 'price is required'}, status=status.HTTP_400_BAD_REQUEST)
+    try:
+        price = float(price)
+        if price <= 0:
+            raise ValueError
+    except (ValueError, TypeError):
+        return Response({'error': 'price must be a positive number'}, status=status.HTTP_400_BAD_REQUEST)
+
+    booking = Booking.objects.filter(booking_id=booking_id).first()
+    if not booking:
+        return Response({'error': 'Booking not found'}, status=status.HTTP_404_NOT_FOUND)
+
+    booking.amount = price
+    if booking.dealer:
+        from .models import CommissionRule
+        rate = CommissionRule.get_rate(booking.service, booking.farmer.district or '')
+        booking.commission_amount = round(price * rate / 100, 2)
+    booking.save()
+
+    return Response({'status': 'updated', 'booking_id': booking_id, 'amount': price})
+
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
 def reject_booking(request):
+    """Operator rejects/skips a booking"""
+    booking_id = request.data.get('booking_id')
+    return Response({'status': 'rejected', 'booking_id': booking_id})
+
+
+@api_view(['GET', 'POST', 'DELETE'])
+@permission_classes([IsAuthenticated])
+def commission_rules(request):
+    """Admin manages commission rules per service/district"""
+    from .models import CommissionRule
+    if request.user.role not in ('manager', 'admin'):
+        return Response({'error': 'Not authorized'}, status=status.HTTP_403_FORBIDDEN)
+
+    if request.method == 'GET':
+        rules = CommissionRule.objects.all()
+        return Response([{
+            'id': r.id,
+            'service': r.service,
+            'district': r.district,
+            'commission_percent': float(r.commission_percent),
+            'updated_at': r.updated_at.strftime('%d %b %Y'),
+        } for r in rules])
+
+    if request.method == 'POST':
+        svc = request.data.get('service', '')
+        district = request.data.get('district', '')
+        percent = request.data.get('commission_percent')
+        if percent is None:
+            return Response({'error': 'commission_percent required'}, status=status.HTTP_400_BAD_REQUEST)
+        try:
+            percent = float(percent)
+            if not (0 <= percent <= 100):
+                raise ValueError
+        except (ValueError, TypeError):
+            return Response({'error': 'commission_percent must be 0-100'}, status=status.HTTP_400_BAD_REQUEST)
+        rule, _ = CommissionRule.objects.update_or_create(
+            service=svc, district=district,
+            defaults={'commission_percent': percent}
+        )
+        return Response({'id': rule.id, 'service': rule.service, 'district': rule.district, 'commission_percent': float(rule.commission_percent)}, status=status.HTTP_201_CREATED)
+
+    if request.method == 'DELETE':
+        rule_id = request.data.get('id')
+        CommissionRule.objects.filter(id=rule_id).delete()
+        return Response({'status': 'deleted'})
+
+
     """Operator rejects/skips a booking"""
     booking_id = request.data.get('booking_id')
     # Just acknowledge - booking stays pending for others
