@@ -67,6 +67,7 @@ class KYCDocument(models.Model):
     DOC_TYPE_CHOICES = [
         ('aadhaar', 'Aadhaar Card'),
         ('pan', 'PAN Card'),
+        ('driving_license', 'Driving License'),
     ]
     STATUS_CHOICES = [
         ('pending', 'Pending'),
@@ -75,7 +76,7 @@ class KYCDocument(models.Model):
     ]
 
     user = models.ForeignKey('User', on_delete=models.CASCADE, related_name='kyc_documents')
-    doc_type = models.CharField(max_length=10, choices=DOC_TYPE_CHOICES)
+    doc_type = models.CharField(max_length=16, choices=DOC_TYPE_CHOICES)
     doc_number = models.CharField(max_length=20, blank=True)
     doc_image = models.ImageField(upload_to='kyc_documents/')
     status = models.CharField(max_length=10, choices=STATUS_CHOICES, default='pending')
@@ -89,3 +90,34 @@ class KYCDocument(models.Model):
 
     def __str__(self):
         return f"{self.user} - {self.get_doc_type_display()} ({self.status})"
+
+
+class TrainingApplication(models.Model):
+    STATUS_CHOICES = [
+        ('pending', 'Pending'),
+        ('approved', 'Approved'),
+        ('rejected', 'Rejected'),
+        ('completed', 'Completed'),
+    ]
+    TRAINING_TYPE_CHOICES = [
+        ('drone_pilot', 'Drone Pilot Certification'),
+        ('pesticide', 'Pesticide Application License'),
+        ('tractor', 'Tractor Operator Certification'),
+    ]
+
+    user = models.ForeignKey('User', on_delete=models.CASCADE, related_name='training_applications')
+    training_type = models.CharField(max_length=20, choices=TRAINING_TYPE_CHOICES)
+    preferred_date = models.DateField(null=True, blank=True)
+    preferred_location = models.CharField(max_length=100, blank=True)
+    experience_years = models.PositiveSmallIntegerField(default=0)
+    notes = models.TextField(blank=True)
+    status = models.CharField(max_length=10, choices=STATUS_CHOICES, default='pending')
+    remarks = models.TextField(blank=True)
+    applied_at = models.DateTimeField(auto_now_add=True)
+    reviewed_at = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        ordering = ['-applied_at']
+
+    def __str__(self):
+        return f"{self.user} - {self.get_training_type_display()} ({self.status})"

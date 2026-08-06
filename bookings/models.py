@@ -28,6 +28,7 @@ class Booking(models.Model):
     farmer = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name='bookings')
     operator = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, blank=True, related_name='assigned_bookings')
     dealer = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, blank=True, related_name='dealer_bookings')
+    booked_by = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, blank=True, related_name='proxy_bookings', help_text='Set when operator/manager books on behalf of farmer')
 
     service = models.CharField(max_length=30, choices=SERVICE_CHOICES)
     crop = models.CharField(max_length=50)

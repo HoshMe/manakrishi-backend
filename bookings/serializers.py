@@ -6,11 +6,12 @@ from accounts.serializers import UserSerializer
 class BookingSerializer(serializers.ModelSerializer):
     farmer_detail = UserSerializer(source='farmer', read_only=True)
     operator_detail = UserSerializer(source='operator', read_only=True)
+    booked_by_detail = UserSerializer(source='booked_by', read_only=True)
 
     class Meta:
         model = Booking
         fields = '__all__'
-        read_only_fields = ['booking_id', 'farmer', 'operator', 'commission_amount', 'completed_at']
+        read_only_fields = ['booking_id', 'farmer', 'operator', 'booked_by', 'commission_amount', 'completed_at']
 
 
 class CreateBookingSerializer(serializers.ModelSerializer):

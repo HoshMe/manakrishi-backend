@@ -22,8 +22,12 @@ urlpatterns = [
     path('delete-account/', views.delete_account),
     path('operators/', views.list_operators),
     path('dealer-farmers/', views.dealer_farmers),
+    path('nearby-farmers/', views.nearby_farmers),
     path('all-users/', views.list_all_users),
     path('documents/', views.documents),
     path('kyc/review/', views.kyc_review),
     path('kyc/pending/', views.kyc_pending),
+    path('training/', views.training_applications),
+    path('training/admin/', views.training_admin),
+    path('license-requests/', views.license_requests),
 ]

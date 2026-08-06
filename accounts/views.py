@@ -256,11 +256,25 @@ def list_operators(request):
 @permission_classes([IsAuthenticated])
 def dealer_farmers(request):
     """List farmers associated with this dealer"""
-    # Farmers who have bookings created by this dealer
     from bookings.models import Booking
     farmer_ids = Booking.objects.filter(dealer=request.user).values_list('farmer_id', flat=True).distinct()
     farmers = User.objects.filter(id__in=farmer_ids).values('id', 'first_name', 'last_name', 'phone', 'address')
     return Response(list(farmers))
+
+
+@api_view(['GET'])
+@permission_classes([IsAuthenticated])
+def nearby_farmers(request):
+    """List farmers in the same district — for manager and dealer roles"""
+    if request.user.role not in ('manager', 'admin', 'dealer'):
+        return Response({'error': 'Not authorized'}, status=status.HTTP_403_FORBIDDEN)
+    district = request.GET.get('district', '') or request.user.district
+    if not district:
+        return Response({'error': 'No district set on your profile'}, status=status.HTTP_400_BAD_REQUEST)
+    farmers = User.objects.filter(role='farmer', district__iexact=district).values(
+        'id', 'first_name', 'last_name', 'phone', 'address', 'district', 'state', 'is_verified', 'created_at'
+    ).order_by('-created_at')
+    return Response({'district': district, 'count': farmers.count(), 'results': list(farmers)})
 
 
 @api_view(['GET'])
@@ -307,8 +321,8 @@ def documents(request):
     doc_number = request.data.get('doc_number', '')
     doc_image = request.FILES.get('doc_image')
 
-    if not doc_type or doc_type not in ('aadhaar', 'pan'):
-        return Response({'error': 'doc_type must be aadhaar or pan'}, status=status.HTTP_400_BAD_REQUEST)
+    if not doc_type or doc_type not in ('aadhaar', 'pan', 'driving_license'):
+        return Response({'error': 'doc_type must be aadhaar, pan, or driving_license'}, status=status.HTTP_400_BAD_REQUEST)
     if not doc_image:
         return Response({'error': 'doc_image is required'}, status=status.HTTP_400_BAD_REQUEST)
 
@@ -378,6 +392,117 @@ def kyc_review(request):
     user.is_verified = action == 'approve'
     user.save()
     return Response({'status': 'approved' if action == 'approve' else 'rejected', 'user_verified': user.is_verified})
+
+# ─── Training Applications ───────────────────────────────────────────────────
+
+@api_view(['GET', 'POST'])
+@permission_classes([IsAuthenticated])
+def training_applications(request):
+    """Operator: list own applications or submit new one"""
+    from .models import TrainingApplication
+    if request.method == 'GET':
+        apps = TrainingApplication.objects.filter(user=request.user)
+        data = [{
+            'id': a.id,
+            'training_type': a.training_type,
+            'training_label': a.get_training_type_display(),
+            'preferred_date': a.preferred_date.strftime('%d %b %Y') if a.preferred_date else None,
+            'preferred_location': a.preferred_location,
+            'experience_years': a.experience_years,
+            'notes': a.notes,
+            'status': a.status,
+            'remarks': a.remarks,
+            'applied_at': a.applied_at.strftime('%d %b %Y'),
+        } for a in apps]
+        return Response(data)
+
+    training_type = request.data.get('training_type')
+    valid_types = [c[0] for c in TrainingApplication.TRAINING_TYPE_CHOICES]
+    if not training_type or training_type not in valid_types:
+        return Response({'error': f'training_type must be one of: {valid_types}'}, status=status.HTTP_400_BAD_REQUEST)
+
+    existing = TrainingApplication.objects.filter(user=request.user, training_type=training_type, status__in=['pending', 'approved']).first()
+    if existing:
+        return Response({'error': 'You already have an active application for this training type.'}, status=status.HTTP_400_BAD_REQUEST)
+
+    from datetime import date
+    preferred_date_str = request.data.get('preferred_date', '')
+    preferred_date = None
+    if preferred_date_str:
+        try:
+            preferred_date = date.fromisoformat(preferred_date_str)
+        except ValueError:
+            return Response({'error': 'preferred_date must be YYYY-MM-DD'}, status=status.HTTP_400_BAD_REQUEST)
+
+    app = TrainingApplication.objects.create(
+        user=request.user,
+        training_type=training_type,
+        preferred_date=preferred_date,
+        preferred_location=request.data.get('preferred_location', ''),
+        experience_years=int(request.data.get('experience_years', 0) or 0),
+        notes=request.data.get('notes', ''),
+    )
+    return Response({'status': 'applied', 'id': app.id, 'training_type': app.training_type}, status=status.HTTP_201_CREATED)
+
+
+@api_view(['GET', 'POST'])
+@permission_classes([IsAuthenticated])
+def training_admin(request):
+    """Admin/manager: list all applications or review one"""
+    if request.user.role not in ('manager', 'admin'):
+        return Response({'error': 'Not authorized'}, status=status.HTTP_403_FORBIDDEN)
+    from .models import TrainingApplication
+
+    if request.method == 'GET':
+        status_filter = request.GET.get('status', '')
+        qs = TrainingApplication.objects.select_related('user').all()
+        if status_filter:
+            qs = qs.filter(status=status_filter)
+        data = [{
+            'id': a.id,
+            'user_id': a.user_id,
+            'user_name': a.user.get_full_name(),
+            'user_phone': a.user.phone,
+            'training_type': a.training_type,
+            'training_label': a.get_training_type_display(),
+            'preferred_date': a.preferred_date.strftime('%d %b %Y') if a.preferred_date else None,
+            'preferred_location': a.preferred_location,
+            'experience_years': a.experience_years,
+            'notes': a.notes,
+            'status': a.status,
+            'remarks': a.remarks,
+            'applied_at': a.applied_at.strftime('%d %b %Y'),
+        } for a in qs]
+        return Response(data)
+
+    app_id = request.data.get('id')
+    action = request.data.get('action')
+    if not app_id or action not in ('approve', 'reject', 'complete'):
+        return Response({'error': 'id and action (approve/reject/complete) required'}, status=status.HTTP_400_BAD_REQUEST)
+    try:
+        app = TrainingApplication.objects.get(id=app_id)
+    except TrainingApplication.DoesNotExist:
+        return Response({'error': 'Not found'}, status=status.HTTP_404_NOT_FOUND)
+    status_map = {'approve': 'approved', 'reject': 'rejected', 'complete': 'completed'}
+    app.status = status_map[action]
+    app.remarks = request.data.get('remarks', '')
+    from django.utils import timezone
+    app.reviewed_at = timezone.now()
+    app.save()
+    return Response({'status': app.status})
+
+
+@api_view(['GET'])
+@permission_classes([IsAuthenticated])
+def license_requests(request):
+    """Admin/manager: list operators who need license assistance"""
+    if request.user.role not in ('manager', 'admin'):
+        return Response({'error': 'Not authorized'}, status=status.HTTP_403_FORBIDDEN)
+    operators = User.objects.filter(role='operator', needs_license=True).values(
+        'id', 'first_name', 'last_name', 'phone', 'district', 'state', 'services', 'is_verified'
+    )
+    return Response(list(operators))
+
 
 # ─── Password Login ───────────────────────────────────────────────────────────
 

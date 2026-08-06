@@ -66,7 +66,8 @@ class BookingViewSet(viewsets.ModelViewSet, IsRole):
         return Response(BookingSerializer(booking).data, status=status.HTTP_201_CREATED)
 
     def perform_create(self, serializer):
-        if self.request.user.role == 'dealer':
+        user = self.request.user
+        if user.role in ('dealer', 'operator', 'manager', 'admin'):
             farmer_id = self.request.data.get('farmer_id')
             farmer_phone = self.request.data.get('farmer_phone', '').strip()
             farmer_name = self.request.data.get('farmer_name', '').strip()
@@ -81,12 +82,13 @@ class BookingViewSet(viewsets.ModelViewSet, IsRole):
                     farmer = User.objects.create_user(
                         username=farmer_phone,
                         phone=farmer_phone,
-                        first_name=name_parts[0],
+                        first_name=name_parts[0] if name_parts else farmer_name,
                         last_name=name_parts[1] if len(name_parts) > 1 else '',
                         role='farmer',
+                        district=user.district or '',
+                        state=user.state or '',
                     )
             elif farmer_name:
-                # No phone — create a phoneless farmer record using name + dealer context
                 import uuid
                 name_parts = farmer_name.split(' ', 1)
                 farmer = User.objects.create_user(
@@ -94,18 +96,18 @@ class BookingViewSet(viewsets.ModelViewSet, IsRole):
                     first_name=name_parts[0],
                     last_name=name_parts[1] if len(name_parts) > 1 else '',
                     role='farmer',
+                    district=user.district or '',
+                    state=user.state or '',
                 )
 
             if not farmer:
                 from rest_framework.exceptions import ValidationError
-                raise ValidationError({'farmer_name': 'Farmer name is required'})
+                raise ValidationError({'farmer_name': 'Farmer name or phone is required'})
 
-            booking = serializer.save(
-                farmer=farmer,
-                dealer=self.request.user,
-                status='pending',
-                amount=0,
-            )
+            kwargs = dict(farmer=farmer, status='pending', amount=0, booked_by=user)
+            if user.role == 'dealer':
+                kwargs['dealer'] = user
+            booking = serializer.save(**kwargs)
         else:
             booking = serializer.save(farmer=self.request.user, status='pending', amount=0)
 
