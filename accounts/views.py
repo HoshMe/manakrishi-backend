@@ -266,7 +266,7 @@ def dealer_farmers(request):
 @permission_classes([IsAuthenticated])
 def nearby_farmers(request):
     """List farmers in the same district — for manager and dealer roles"""
-    if request.user.role not in ('manager', 'admin', 'dealer'):
+    if request.user.role not in ('manager', 'admin', 'dealer', 'operator'):
         return Response({'error': 'Not authorized'}, status=status.HTTP_403_FORBIDDEN)
     district = request.GET.get('district', '') or request.user.district
     if not district:
