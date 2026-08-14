@@ -117,7 +117,7 @@ class BookingViewSet(viewsets.ModelViewSet, IsRole):
         send_booking_notification.delay(booking.id, 'booking_confirmed')
 
     @action(detail=True, methods=['post'])
-    def assign_operator(self, request, pk=None):
+    def assign_operator(self, request, booking_id=None):
         if not self.check_role(request, ['manager']):
             return Response({'error': 'Not authorized'}, status=status.HTTP_403_FORBIDDEN)
         booking = self.get_object()
@@ -129,7 +129,7 @@ class BookingViewSet(viewsets.ModelViewSet, IsRole):
         return Response(BookingSerializer(booking).data)
 
     @action(detail=True, methods=['post'])
-    def update_status(self, request, pk=None):
+    def update_status(self, request, booking_id=None):
         booking = self.get_object()
         new_status = request.data.get('status')
         valid = ['on_the_way', 'in_progress', 'completed', 'cancelled']

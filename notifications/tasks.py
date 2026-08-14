@@ -139,6 +139,7 @@ def assign_booking_to_nearby_operators(booking_id):
     operators = User.objects.filter(
         role='operator',
         is_active=True,
+        is_on_duty=True,
     ).exclude(location_lat=None).exclude(location_lng=None)
 
     # Calculate distance and sort by nearest

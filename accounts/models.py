@@ -13,7 +13,7 @@ class User(AbstractUser):
 
     phone = models.CharField(max_length=15, unique=True, null=True, blank=True)
     role = models.CharField(max_length=10, choices=ROLE_CHOICES, default='farmer')
-    push_token = models.CharField(max_length=255, blank=True)
+    push_token = models.CharField(max_length=255, blank=True, default='')
     language = models.CharField(max_length=5, default='en')
     location_lat = models.DecimalField(max_digits=9, decimal_places=6, null=True, blank=True)
     location_lng = models.DecimalField(max_digits=9, decimal_places=6, null=True, blank=True)
