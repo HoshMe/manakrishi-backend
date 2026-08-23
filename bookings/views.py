@@ -1,3 +1,4 @@
+from django.db import models
 from django.utils import timezone
 from rest_framework import viewsets, status
 from rest_framework.decorators import action, api_view, permission_classes
@@ -167,6 +168,8 @@ class BookingViewSet(viewsets.ModelViewSet, IsRole):
 
 from django.db import models  # noqa: E402
 
+# (models already imported at top)
+
 
 @api_view(['POST'])
 @permission_classes([IsAuthenticated])
@@ -225,7 +228,7 @@ def service_pricing(request):
 @api_view(['POST'])
 @permission_classes([IsAuthenticated])
 def update_user_role(request):
-    """Update user role - admin/manager only"""
+    """Update user role - admin/manager only. Clears role-specific data to prevent glitches."""
     if request.user.role not in ('manager', 'admin'):
         return Response({'error': 'Not authorized'}, status=status.HTTP_403_FORBIDDEN)
     user_id = request.data.get('user_id')
@@ -236,9 +239,238 @@ def update_user_role(request):
     user = User.objects.filter(id=user_id).first()
     if not user:
         return Response({'error': 'User not found'}, status=status.HTTP_404_NOT_FOUND)
+    old_role = user.role
     user.role = new_role
+    # Reset role-specific flags to prevent app glitches after role change
+    if new_role != 'operator':
+        user.is_on_duty = False
+    if new_role == 'farmer':
+        user.services = []
+        user.needs_license = False
     user.save()
-    return Response({'status': 'updated', 'user_id': user_id, 'role': new_role})
+    return Response({'status': 'updated', 'user_id': user_id, 'old_role': old_role, 'role': new_role})
+
+
+@api_view(['GET'])
+@permission_classes([IsAuthenticated])
+def operators_for_booking(request):
+    """Admin/manager: list eligible operators for a booking with service pricing."""
+    if request.user.role not in ('manager', 'admin'):
+        return Response({'error': 'Not authorized'}, status=status.HTTP_403_FORBIDDEN)
+    booking_id = request.GET.get('booking_id', '')
+    booking = Booking.objects.filter(booking_id=booking_id).first()
+    if not booking:
+        return Response({'error': 'Booking not found'}, status=status.HTTP_404_NOT_FOUND)
+
+    from .models import ServicePricing
+    DEFAULT_PRICING = {
+        'drone_spraying': 600, 'tractor_rental': 700, 'rotavator': 500,
+        'harvester': 1000, 'seed_drill': 400, 'water_tanker': 800,
+        'cultivator': 450, 'fertilizer_spraying': 550,
+    }
+    db_prices = {p.service: float(p.price_per_acre) for p in ServicePricing.objects.all()}
+    price_per_acre = db_prices.get(booking.service, DEFAULT_PRICING.get(booking.service, 0))
+    estimated_amount = round(price_per_acre * float(booking.area_acres), 2)
+
+    # Find operators in same district who offer this service
+    farmer_district = (booking.farmer.district or '').lower() if booking.farmer else ''
+    ops = User.objects.filter(role='operator', is_active=True)
+    if farmer_district:
+        ops = ops.filter(district__iexact=farmer_district)
+
+    result = []
+    for op in ops:
+        services = op.services or []
+        matches_service = booking.service in services or not services
+        result.append({
+            'id': op.id,
+            'name': op.get_full_name() or op.phone,
+            'phone': op.phone,
+            'district': op.district,
+            'state': op.state,
+            'is_on_duty': op.is_on_duty,
+            'is_verified': op.is_verified,
+            'services': services,
+            'matches_service': matches_service,
+            'machine_count': op.machines.filter(is_active=True).count(),
+            'price_per_acre': price_per_acre,
+            'estimated_amount': estimated_amount,
+        })
+    # Sort: service-matching + on-duty first
+    result.sort(key=lambda x: (not x['matches_service'], not x['is_on_duty']))
+    return Response({
+        'booking_id': booking_id,
+        'service': booking.service,
+        'area_acres': str(booking.area_acres),
+        'price_per_acre': price_per_acre,
+        'estimated_amount': estimated_amount,
+        'operators': result,
+    })
+
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
+def admin_assign_operator(request):
+    """Admin/manager: manually assign an operator to a booking."""
+    if request.user.role not in ('manager', 'admin'):
+        return Response({'error': 'Not authorized'}, status=status.HTTP_403_FORBIDDEN)
+    booking_id = request.data.get('booking_id')
+    operator_id = request.data.get('operator_id')
+    if not booking_id or not operator_id:
+        return Response({'error': 'booking_id and operator_id required'}, status=status.HTTP_400_BAD_REQUEST)
+    booking = Booking.objects.filter(booking_id=booking_id).first()
+    if not booking:
+        return Response({'error': 'Booking not found'}, status=status.HTTP_404_NOT_FOUND)
+    operator = User.objects.filter(id=operator_id, role='operator').first()
+    if not operator:
+        return Response({'error': 'Operator not found'}, status=status.HTTP_404_NOT_FOUND)
+    booking.operator = operator
+    booking.status = 'operator_assigned'
+    # Set price if not already set
+    if not booking.amount or float(booking.amount) == 0:
+        from .models import ServicePricing
+        DEFAULT_PRICING = {
+            'drone_spraying': 600, 'tractor_rental': 700, 'rotavator': 500,
+            'harvester': 1000, 'seed_drill': 400, 'water_tanker': 800,
+            'cultivator': 450, 'fertilizer_spraying': 550,
+        }
+        db_prices = {p.service: float(p.price_per_acre) for p in ServicePricing.objects.all()}
+        price = db_prices.get(booking.service, DEFAULT_PRICING.get(booking.service, 0))
+        booking.amount = round(price * float(booking.area_acres), 2)
+    if booking.dealer:
+        from .models import CommissionRule
+        rate = CommissionRule.get_rate(booking.service, booking.farmer.district or '')
+        booking.commission_amount = round(float(booking.amount) * rate / 100, 2)
+    booking.save()
+    send_booking_notification.delay(booking.id, 'operator_assigned')
+    return Response(BookingSerializer(booking).data)
+
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
+def admin_create_booking(request):
+    """Admin/manager: create a booking on behalf of a farmer."""
+    if request.user.role not in ('manager', 'admin'):
+        return Response({'error': 'Not authorized'}, status=status.HTTP_403_FORBIDDEN)
+
+    # Resolve or create farmer
+    farmer_id = request.data.get('farmer_id')
+    farmer_phone = (request.data.get('farmer_phone') or '').strip()
+    farmer_name = (request.data.get('farmer_name') or '').strip()
+    farmer = None
+
+    if farmer_id:
+        farmer = User.objects.filter(id=farmer_id, role='farmer').first()
+        if not farmer:
+            return Response({'error': 'Farmer not found'}, status=status.HTTP_404_NOT_FOUND)
+    elif farmer_phone:
+        farmer = User.objects.filter(phone=farmer_phone).first()
+        if not farmer:
+            name_parts = farmer_name.split(' ', 1) if farmer_name else ['Farmer']
+            farmer = User.objects.create_user(
+                username=farmer_phone, phone=farmer_phone,
+                first_name=name_parts[0],
+                last_name=name_parts[1] if len(name_parts) > 1 else '',
+                role='farmer',
+                district=request.data.get('farmer_district', request.user.district or ''),
+                state=request.data.get('farmer_state', request.user.state or ''),
+            )
+    else:
+        return Response({'error': 'farmer_id or farmer_phone is required'}, status=status.HTTP_400_BAD_REQUEST)
+
+    # Validate required booking fields
+    required = ['service', 'crop', 'area_acres', 'scheduled_date', 'scheduled_time', 'location_address']
+    missing = [f for f in required if not request.data.get(f)]
+    if missing:
+        return Response({'error': f'Missing fields: {missing}'}, status=status.HTTP_400_BAD_REQUEST)
+
+    svc = request.data['service']
+    valid_services = [c[0] for c in Booking.SERVICE_CHOICES]
+    if svc not in valid_services:
+        return Response({'error': f'service must be one of: {valid_services}'}, status=status.HTTP_400_BAD_REQUEST)
+
+    # Compute amount from pricing
+    from .models import ServicePricing
+    DEFAULT_PRICING = {
+        'drone_spraying': 600, 'tractor_rental': 700, 'rotavator': 500,
+        'harvester': 1000, 'seed_drill': 400, 'water_tanker': 800,
+        'cultivator': 450, 'fertilizer_spraying': 550,
+    }
+    db_prices = {p.service: float(p.price_per_acre) for p in ServicePricing.objects.all()}
+    price_per_acre = db_prices.get(svc, DEFAULT_PRICING.get(svc, 0))
+    area = float(request.data['area_acres'])
+    amount = round(price_per_acre * area, 2)
+
+    booking = Booking.objects.create(
+        farmer=farmer,
+        booked_by=request.user,
+        service=svc,
+        crop=request.data['crop'],
+        area_acres=area,
+        scheduled_date=request.data['scheduled_date'],
+        scheduled_time=request.data['scheduled_time'],
+        location_address=request.data['location_address'],
+        location_lat=request.data.get('location_lat') or None,
+        location_lng=request.data.get('location_lng') or None,
+        spray_type=request.data.get('spray_type', ''),
+        status='pending',
+        amount=amount,
+    )
+
+    # Optional: immediately assign operator
+    operator_id = request.data.get('operator_id')
+    if operator_id:
+        operator = User.objects.filter(id=operator_id, role='operator').first()
+        if operator:
+            booking.operator = operator
+            booking.status = 'operator_assigned'
+            from .models import CommissionRule
+            rate = CommissionRule.get_rate(svc, farmer.district or '')
+            booking.commission_amount = round(amount * rate / 100, 2)
+            booking.save()
+            send_booking_notification.delay(booking.id, 'operator_assigned')
+        else:
+            booking.save()
+    else:
+        booking.save()
+        from notifications.tasks import assign_booking_to_nearby_operators
+        assign_booking_to_nearby_operators.delay(booking.id)
+
+    send_booking_notification.delay(booking.id, 'booking_confirmed')
+    return Response(BookingSerializer(booking).data, status=status.HTTP_201_CREATED)
+
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
+def admin_update_booking(request):
+    """Admin/manager: update any field on a booking — status, price, date, notes."""
+    if request.user.role not in ('manager', 'admin'):
+        return Response({'error': 'Not authorized'}, status=status.HTTP_403_FORBIDDEN)
+
+    booking_id = request.data.get('booking_id')
+    booking = Booking.objects.filter(booking_id=booking_id).first()
+    if not booking:
+        return Response({'error': 'Booking not found'}, status=status.HTTP_404_NOT_FOUND)
+
+    updatable = ['status', 'amount', 'scheduled_date', 'scheduled_time', 'location_address', 'crop', 'area_acres', 'spray_type']
+    changed = False
+    for field in updatable:
+        if field in request.data:
+            setattr(booking, field, request.data[field])
+            changed = True
+
+    if 'status' in request.data:
+        new_status = request.data['status']
+        valid = [c[0] for c in Booking.STATUS_CHOICES]
+        if new_status not in valid:
+            return Response({'error': f'status must be one of: {valid}'}, status=status.HTTP_400_BAD_REQUEST)
+        if new_status == 'completed':
+            booking.completed_at = timezone.now()
+        send_booking_notification.delay(booking.id, new_status)
+
+    if changed:
+        booking.save()
+    return Response(BookingSerializer(booking).data)
 
 
 @api_view(['GET'])

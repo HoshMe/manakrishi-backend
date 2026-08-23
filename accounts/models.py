@@ -92,6 +92,32 @@ class KYCDocument(models.Model):
         return f"{self.user} - {self.get_doc_type_display()} ({self.status})"
 
 
+class Machine(models.Model):
+    MACHINE_TYPE_CHOICES = [
+        ('drone', 'Drone'),
+        ('tractor', 'Tractor'),
+        ('harvester', 'Harvester'),
+        ('rotavator', 'Rotavator'),
+        ('seed_drill', 'Seed Drill'),
+        ('water_tanker', 'Water Tanker'),
+        ('cultivator', 'Cultivator'),
+        ('fertilizer_sprayer', 'Fertilizer Sprayer'),
+    ]
+
+    operator = models.ForeignKey('User', on_delete=models.CASCADE, related_name='machines')
+    machine_type = models.CharField(max_length=30, choices=MACHINE_TYPE_CHOICES)
+    model_name = models.CharField(max_length=100, blank=True)
+    registration_number = models.CharField(max_length=50, blank=True)
+    is_active = models.BooleanField(default=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ['machine_type']
+
+    def __str__(self):
+        return f"{self.operator} - {self.get_machine_type_display()}"
+
+
 class TrainingApplication(models.Model):
     STATUS_CHOICES = [
         ('pending', 'Pending'),

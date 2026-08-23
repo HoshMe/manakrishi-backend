@@ -123,67 +123,61 @@ def send_push_to_role(role, title, body, notif_type='general', data=None):
 @shared_task
 def assign_booking_to_nearby_operators(booking_id):
     """
-    Find nearby operators and notify them about the new booking.
-    Works like taxi dispatch - sends to closest operators first.
+    Assign booking to operators based on district + service type.
+    No GPS required. Falls back: same district → any active operator.
     """
     from bookings.models import Booking
     from accounts.models import User
-    from math import radians, cos, sin, asin, sqrt
 
-    booking = Booking.objects.get(id=booking_id)
-    
-    if not booking.location_lat or not booking.location_lng:
-        return {'status': 'no_location'}
+    booking = Booking.objects.select_related('farmer').get(id=booking_id)
+    service = booking.service
+    farmer_district = (booking.farmer.district or '').strip().lower() if booking.farmer else ''
 
-    # Find all active operators with location
-    operators = User.objects.filter(
-        role='operator',
-        is_active=True,
-        is_on_duty=True,
-    ).exclude(location_lat=None).exclude(location_lng=None)
+    # All active on-duty operators
+    base_qs = User.objects.filter(role='operator', is_active=True, is_on_duty=True)
 
-    # Calculate distance and sort by nearest
-    def haversine(lat1, lon1, lat2, lon2):
-        lat1, lon1, lat2, lon2 = map(radians, [float(lat1), float(lon1), float(lat2), float(lon2)])
-        dlat = lat2 - lat1
-        dlon = lon2 - lon1
-        a = sin(dlat/2)**2 + cos(lat1) * cos(lat2) * sin(dlon/2)**2
-        return 6371 * 2 * asin(sqrt(a))  # km
+    # Step 1: same district + matching service
+    if farmer_district:
+        candidates = [op for op in base_qs.filter(district__iexact=farmer_district)
+                      if service in (op.services or []) or not op.services]
+    else:
+        candidates = []
 
-    nearby = []
-    for op in operators:
-        dist = haversine(booking.location_lat, booking.location_lng, op.location_lat, op.location_lng)
-        if dist <= 50:  # Within 50km radius
-            nearby.append((op, dist))
+    # Step 2: same district, any service
+    if not candidates and farmer_district:
+        candidates = list(base_qs.filter(district__iexact=farmer_district))
 
-    # Sort by distance
-    nearby.sort(key=lambda x: x[1])
+    # Step 3: matching service, any district
+    if not candidates:
+        candidates = [op for op in base_qs if service in (op.services or []) or not op.services]
 
-    # Notify top 5 nearest operators
+    # Step 4: any active on-duty operator
+    if not candidates:
+        candidates = list(base_qs)
+
     notified = []
-    for op, dist in nearby[:5]:
+    for op in candidates[:5]:
+        area_label = booking.farmer.district or 'your area' if booking.farmer else 'your area'
         _create_notification(
             op, 'new_order',
-            'New Order Nearby!',
-            f'{booking.get_service_display()} - {booking.area_acres} acres, {dist:.1f}km away',
-            {'type': 'new_order', 'booking_id': booking.booking_id, 'distance_km': round(dist, 1)}
+            'New Order Available!',
+            f'{booking.get_service_display()} — {booking.area_acres} acres in {area_label}',
+            {'type': 'new_order', 'booking_id': booking.booking_id}
         )
         _send_push(
             op,
-            'New Order Nearby!',
-            f'{booking.get_service_display()} - {booking.area_acres} acres, {dist:.1f}km away',
+            'New Order Available!',
+            f'{booking.get_service_display()} — {booking.area_acres} acres in {area_label}',
             {'type': 'new_order', 'booking_id': booking.booking_id}
         )
         notified.append(op.id)
 
-    # Store notified operators on booking for tracking
-    booking.status = 'pending'
-    booking.save()
-
-    # Store in Redis which operators were notified (expires in 10 min)
-    import redis
-    from django.conf import settings
-    r = redis.from_url(settings.REDIS_URL)
-    r.setex(f'booking:{booking.booking_id}:notified', 600, ','.join(map(str, notified)))
+    try:
+        import redis
+        from django.conf import settings
+        r = redis.from_url(settings.REDIS_URL)
+        r.setex(f'booking:{booking.booking_id}:notified', 600, ','.join(map(str, notified)))
+    except Exception:
+        pass
 
     return {'notified': len(notified), 'operators': notified}

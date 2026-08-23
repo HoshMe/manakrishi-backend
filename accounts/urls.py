@@ -30,4 +30,7 @@ urlpatterns = [
     path('training/', views.training_applications),
     path('training/admin/', views.training_admin),
     path('license-requests/', views.license_requests),
+    path('machines/', views.machines),
+    path('machine-stats/', views.machine_stats),
+    path('update-operator-district/', views.update_operator_district),
 ]

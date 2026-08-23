@@ -1,12 +1,33 @@
 from rest_framework import serializers
-from .models import User
+from .models import User, Machine
+
+
+class MachineSerializer(serializers.ModelSerializer):
+    machine_type_display = serializers.CharField(source='get_machine_type_display', read_only=True)
+
+    class Meta:
+        model = Machine
+        fields = ['id', 'machine_type', 'machine_type_display', 'model_name', 'registration_number', 'is_active', 'created_at']
 
 
 class UserSerializer(serializers.ModelSerializer):
+    machine_count = serializers.SerializerMethodField()
+    machine_types = serializers.SerializerMethodField()
+
     class Meta:
         model = User
-        fields = ['id', 'phone', 'email', 'first_name', 'last_name', 'role', 'language', 'address', 'state', 'district', 'services', 'login_methods', 'is_on_duty', 'location_lat', 'location_lng', 'is_verified', 'needs_license', 'push_token']
+        fields = ['id', 'phone', 'email', 'first_name', 'last_name', 'role', 'language', 'address', 'state', 'district', 'services', 'login_methods', 'is_on_duty', 'location_lat', 'location_lng', 'is_verified', 'needs_license', 'push_token', 'machine_count', 'machine_types']
         read_only_fields = ['id', 'is_verified']
+
+    def get_machine_count(self, obj):
+        if obj.role == 'operator':
+            return obj.machines.filter(is_active=True).count()
+        return 0
+
+    def get_machine_types(self, obj):
+        if obj.role == 'operator':
+            return list(obj.machines.filter(is_active=True).values_list('machine_type', flat=True).distinct())
+        return []
 
 
 class SignupSerializer(serializers.Serializer):

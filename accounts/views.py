@@ -1,6 +1,7 @@
 import random
 import requests
 from datetime import timedelta
+from django.db.models import Count
 from django.utils import timezone
 from django.conf import settings
 from rest_framework import status
@@ -241,14 +242,24 @@ def delete_account(request):
 @api_view(['GET'])
 @permission_classes([IsAuthenticated])
 def list_operators(request):
-    """List all operators (for area managers) - filterable by district"""
+    """List all operators - filterable by district. Returns machine_count too."""
+    from .models import Machine
+    from django.db.models import Count
     qs = User.objects.filter(role='operator')
     district = request.GET.get('district', '')
+    state = request.GET.get('state', '')
     if district:
         qs = qs.filter(district__iexact=district)
-    elif request.user.district:
+    elif request.user.role not in ('admin',) and request.user.district:
         qs = qs.filter(district__iexact=request.user.district)
-    operators = qs.values('id', 'first_name', 'last_name', 'phone', 'address', 'district', 'is_active', 'is_on_duty', 'services')
+    if state:
+        qs = qs.filter(state__iexact=state)
+    # Annotate machine count
+    qs = qs.annotate(machine_count=Count('machines', filter=DQ(machines__is_active=True)))
+    operators = qs.values(
+        'id', 'first_name', 'last_name', 'phone', 'address',
+        'district', 'state', 'is_active', 'is_on_duty', 'services', 'machine_count', 'is_verified'
+    )
     return Response(list(operators))
 
 
@@ -490,6 +501,103 @@ def training_admin(request):
     app.reviewed_at = timezone.now()
     app.save()
     return Response({'status': app.status})
+
+
+@api_view(['GET', 'POST', 'DELETE'])
+@permission_classes([IsAuthenticated])
+def machines(request):
+    """Operator: list/add/delete own machines"""
+    from .models import Machine
+    if request.method == 'GET':
+        target_id = request.GET.get('operator_id')
+        if target_id and request.user.role in ('manager', 'admin'):
+            qs = Machine.objects.filter(operator_id=target_id)
+        else:
+            qs = Machine.objects.filter(operator=request.user)
+        from .serializers import MachineSerializer
+        return Response(MachineSerializer(qs, many=True).data)
+
+    if request.method == 'POST':
+        machine_type = request.data.get('machine_type', '')
+        valid = [c[0] for c in Machine.MACHINE_TYPE_CHOICES]
+        if machine_type not in valid:
+            return Response({'error': f'machine_type must be one of: {valid}'}, status=status.HTTP_400_BAD_REQUEST)
+        machine = Machine.objects.create(
+            operator=request.user,
+            machine_type=machine_type,
+            model_name=request.data.get('model_name', ''),
+            registration_number=request.data.get('registration_number', ''),
+        )
+        from .serializers import MachineSerializer
+        return Response(MachineSerializer(machine).data, status=status.HTTP_201_CREATED)
+
+    if request.method == 'DELETE':
+        machine_id = request.data.get('id')
+        Machine.objects.filter(id=machine_id, operator=request.user).delete()
+        return Response({'status': 'deleted'})
+
+
+@api_view(['GET'])
+@permission_classes([IsAuthenticated])
+def machine_stats(request):
+    """Admin/manager: machine counts grouped by state → district → type"""
+    if request.user.role not in ('manager', 'admin'):
+        return Response({'error': 'Not authorized'}, status=status.HTTP_403_FORBIDDEN)
+    from .models import Machine
+    from django.db.models import Count
+
+    qs = Machine.objects.filter(is_active=True).select_related('operator')
+    # Scope to manager's district
+    if request.user.role == 'manager' and request.user.district:
+        qs = qs.filter(operator__district__iexact=request.user.district)
+
+    # Build state → district → machine_type → count
+    result = {}
+    for m in qs:
+        state = m.operator.state or 'Unknown State'
+        district = m.operator.district or 'Unknown District'
+        mtype = m.get_machine_type_display()
+        result.setdefault(state, {}).setdefault(district, {}).setdefault(mtype, 0)
+        result[state][district][mtype] += 1
+
+    # Also compute totals per district
+    output = []
+    for state, districts in sorted(result.items()):
+        state_entry = {'state': state, 'districts': []}
+        for district, types in sorted(districts.items()):
+            total = sum(types.values())
+            state_entry['districts'].append({
+                'district': district,
+                'total_machines': total,
+                'by_type': [{'type': t, 'count': c} for t, c in sorted(types.items())],
+            })
+        output.append(state_entry)
+    return Response(output)
+
+
+from django.db import models as django_models
+from django.db.models import Q as DQ
+
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
+def update_operator_district(request):
+    """Admin/manager: update an operator's assigned district and state."""
+    if request.user.role not in ('manager', 'admin'):
+        return Response({'error': 'Not authorized'}, status=status.HTTP_403_FORBIDDEN)
+    operator_id = request.data.get('operator_id')
+    new_district = request.data.get('district', '').strip()
+    new_state = request.data.get('state', '').strip()
+    if not operator_id or not new_district:
+        return Response({'error': 'operator_id and district are required'}, status=status.HTTP_400_BAD_REQUEST)
+    op = User.objects.filter(id=operator_id, role='operator').first()
+    if not op:
+        return Response({'error': 'Operator not found'}, status=status.HTTP_404_NOT_FOUND)
+    op.district = new_district
+    if new_state:
+        op.state = new_state
+    op.save()
+    return Response({'status': 'updated', 'operator_id': operator_id, 'district': op.district, 'state': op.state})
 
 
 @api_view(['GET'])
