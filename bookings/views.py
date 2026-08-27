@@ -241,13 +241,16 @@ def update_user_role(request):
         return Response({'error': 'User not found'}, status=status.HTTP_404_NOT_FOUND)
     old_role = user.role
     user.role = new_role
+    update_fields = ['role']
     # Reset role-specific flags to prevent app glitches after role change
     if new_role != 'operator':
         user.is_on_duty = False
+        update_fields.append('is_on_duty')
     if new_role == 'farmer':
         user.services = []
         user.needs_license = False
-    user.save()
+        update_fields += ['services', 'needs_license']
+    user.save(update_fields=update_fields)
     return Response({'status': 'updated', 'user_id': user_id, 'old_role': old_role, 'role': new_role})
 
 
